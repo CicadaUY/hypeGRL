@@ -613,30 +613,21 @@ def main():
         print(f"Error: {e}")
         return
 
-    # Train embeddings
-    embeddings, embedding_space = train_hyperbolic_embeddings(
-        graph=graph,
-        embedding_type=args.embedding_type,
-        model_dir=args.model_dir,
-        dim=args.dim,
-    )
-
-    # Split data into train and test sets
-    print(f"\nSplitting data into train/test sets (test_size={args.test_size})...")
-    X_train, X_test, y_train, y_test, train_indices, test_indices = train_test_split(
-        embeddings,
-        labels,
+    # Split node indices into train and test sets BEFORE computing embeddings
+    print(f"\nSplitting node indices into train/test sets (test_size={args.test_size})...")
+    train_indices, test_indices, y_train, y_test = train_test_split(
         node_indices,
+        labels,
         test_size=args.test_size,
         random_state=args.random_state,
         stratify=labels,
     )
 
-    print(f"Training set: {len(X_train)} samples")
-    print(f"Test set: {len(X_test)} samples")
+    print(f"Training set: {len(train_indices)} samples")
+    print(f"Test set: {len(test_indices)} samples")
 
     # Print number of classes and test set size
-    print(f"Number of test nodes: {len(X_test)}")
+    print(f"Number of test nodes: {len(test_indices)}")
 
     # Evaluate KNN with different k values across multiple iterations
     print(f"\n{'=' * 90}")
@@ -654,24 +645,19 @@ def main():
         # Generate embeddings with different random seed for each iteration
         iteration_seed = args.random_state + iteration
 
-        if args.n_iterations > 1:
-            # Standard case: re-train embeddings on the same graph with different seed
-            print(f"\nRe-training embeddings with seed={iteration_seed}...")
-            embeddings_iter, _ = train_hyperbolic_embeddings(
-                graph=graph,
-                embedding_type=args.embedding_type,
-                model_dir=os.path.join(args.model_dir, f"iter{iteration}"),
-                dim=args.dim,
-                random_seed=iteration_seed,
-            )
+        # Train embeddings on the full graph with different seed for each iteration
+        print(f"\nTraining embeddings with seed={iteration_seed}...")
+        embeddings_iter, _ = train_hyperbolic_embeddings(
+            graph=graph,
+            embedding_type=args.embedding_type,
+            model_dir=os.path.join(args.model_dir, f"iter{iteration}"),
+            dim=args.dim,
+            random_seed=iteration_seed,
+        )
 
-            # Use the same train/test split indices from the first iteration
-            X_train_iter = embeddings_iter[train_indices]
-            X_test_iter = embeddings_iter[test_indices]
-        else:
-            # Single iteration: use the already computed embeddings
-            X_train_iter = X_train
-            X_test_iter = X_test
+        # Use the pre-determined train/test split indices
+        X_train_iter = embeddings_iter[train_indices]
+        X_test_iter = embeddings_iter[test_indices]
 
         # Evaluate KNN for this iteration
         print(f"\nEvaluating KNN for iteration {iteration + 1}...")
@@ -774,8 +760,8 @@ def main():
         f.write(f"Number of Graph Nodes: {graph.number_of_nodes()}\n")
         f.write(f"Number of Graph Edges: {graph.number_of_edges()}\n")
         f.write(f"Number of Classes: {len(np.unique(labels))}\n")
-        f.write(f"Training Set Size: {len(X_train)}\n")
-        f.write(f"Test Set Size: {len(X_test)}\n")
+        f.write(f"Training Set Size: {len(train_indices)}\n")
+        f.write(f"Test Set Size: {len(test_indices)}\n")
         f.write("\n")
 
         # Write summary results
