@@ -10,6 +10,7 @@ import json
 import os
 import pickle
 import random
+from datetime import datetime
 from typing import Tuple
 
 import networkx as nx
@@ -20,7 +21,6 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import LabelEncoder
 
 from hyperbolic_embeddings import HyperbolicEmbeddings
-from neuroseed_loader import load_neuroseed_dataset
 from poincare_maps_networkx_loader import PoincareMapsLoader
 from utils.geometric_conversions import HyperbolicConversions
 
@@ -105,272 +105,8 @@ def extract_labels_from_graph(graph: nx.Graph) -> np.ndarray:
     return numeric_labels
 
 
-def create_subgraph(
-    graph: nx.Graph,
-    labels: np.ndarray,
-    node_indices: np.ndarray,
-    target_nodes: int = 1000,
-    random_seed: int = None,
-    min_nodes_per_class: int = 5,
-    max_classes: int = None,
-) -> Tuple[nx.Graph, np.ndarray, np.ndarray]:
-    """
-    Create a class-aware connected subgraph with approximately target_nodes nodes.
-
-    This function ensures that each class has at least min_nodes_per_class nodes,
-    then fills up to target_nodes using BFS while trying to maintain class balance.
-    If max_classes is specified, only nodes from the top max_classes (by count) are included.
-
-    Parameters:
-    -----------
-    graph : nx.Graph
-        NetworkX graph to sample from
-    labels : np.ndarray
-        Original labels array
-    node_indices : np.ndarray
-        Original node indices array
-    target_nodes : int
-        Target number of nodes (default: 1000)
-    random_seed : int
-        Random seed for reproducibility (default: None)
-    min_nodes_per_class : int
-        Minimum number of nodes per class (default: 5)
-    max_classes : int
-        Maximum number of classes to include (default: None, includes all classes)
-
-    Returns:
-    --------
-    subgraph : nx.Graph
-        NetworkX Graph subgraph with up to target_nodes nodes
-    subgraph_labels : np.ndarray
-        Labels for nodes in the subgraph
-    subgraph_node_indices : np.ndarray
-        Node indices for nodes in the subgraph
-    """
-    # Set random seed if provided
-    if random_seed is not None:
-        random.seed(random_seed)
-        np.random.seed(random_seed)
-
-    num_nodes = len(graph.nodes())
-    unique_classes = np.unique(labels)
-    num_classes = len(unique_classes)
-
-    # Step 0: Filter to max_classes if specified
-    if max_classes is not None and max_classes < num_classes:
-        print(f"Filtering to top {max_classes} classes from {num_classes} classes...")
-        # Count nodes per class
-        class_counts_dict = {cls: np.sum(labels == cls) for cls in unique_classes}
-        # Sort classes by count (descending) and take top max_classes
-        sorted_classes = sorted(class_counts_dict.items(), key=lambda x: x[1], reverse=True)
-        selected_classes = [cls for cls, count in sorted_classes[:max_classes]]
-        selected_classes_set = set(selected_classes)
-
-        # Filter graph, labels, and node_indices to only include selected classes
-        nodes_to_keep = [node for node in graph.nodes() if labels[node] in selected_classes_set]
-        nodes_to_keep_sorted = sorted(nodes_to_keep)  # Sort for consistent mapping
-
-        # Create mapping from old node indices to new consecutive indices
-        node_mapping = {old_node: new_idx for new_idx, old_node in enumerate(nodes_to_keep_sorted)}
-
-        # Create new graph with remapped node indices (0-based consecutive)
-        graph_filtered = nx.Graph()
-        for old_node in nodes_to_keep_sorted:
-            new_node = node_mapping[old_node]
-            graph_filtered.add_node(new_node)
-
-        # Add edges with remapped node indices
-        for old_u, old_v in graph.edges():
-            if old_u in node_mapping and old_v in node_mapping:
-                new_u = node_mapping[old_u]
-                new_v = node_mapping[old_v]
-                graph_filtered.add_edge(new_u, new_v)
-
-        graph = graph_filtered
-
-        # Reindex labels to be 0, 1, 2, 3 for the 4 classes
-        label_mapping = {old_cls: new_cls for new_cls, old_cls in enumerate(selected_classes)}
-        # Create new arrays with only selected nodes, maintaining order
-        filtered_labels = []
-        filtered_node_indices = []
-        for old_node in nodes_to_keep_sorted:
-            filtered_labels.append(label_mapping[labels[old_node]])
-            filtered_node_indices.append(node_indices[old_node])
-        labels = np.array(filtered_labels)
-        node_indices = np.array(filtered_node_indices)
-
-        # Update unique_classes
-        unique_classes = np.unique(labels)
-        num_classes = len(unique_classes)
-        num_nodes = len(graph.nodes())
-
-        # Verify node indices are 0-based consecutive
-        graph_nodes = sorted(graph.nodes())
-        expected_nodes = list(range(num_nodes))
-        if graph_nodes != expected_nodes:
-            print("Warning: Graph nodes are not 0-based consecutive. Remapping...")
-            # Create a new graph with proper 0-based consecutive indices
-            graph_remapped = nx.Graph()
-            node_remap = {old_node: new_idx for new_idx, old_node in enumerate(graph_nodes)}
-            for old_node in graph_nodes:
-                graph_remapped.add_node(node_remap[old_node])
-            for old_u, old_v in graph.edges():
-                if old_u in node_remap and old_v in node_remap:
-                    graph_remapped.add_edge(node_remap[old_u], node_remap[old_v])
-            graph = graph_remapped
-
-        print(f"After filtering: {num_nodes} nodes, {num_classes} classes")
-        print(f"Selected classes (original labels): {selected_classes}")
-        print(f"Class distribution: {np.bincount(labels)}")
-
-        # Final verification: ensure labels array size matches graph size
-        if len(labels) != num_nodes:
-            raise ValueError(f"Labels array size ({len(labels)}) doesn't match graph size ({num_nodes})")
-
-    # Calculate minimum required nodes
-    min_required_nodes = num_classes * min_nodes_per_class
-
-    # If target is too small, adjust it
-    if target_nodes < min_required_nodes:
-        print(f"Warning: target_nodes ({target_nodes}) is less than minimum required ({min_required_nodes}).")
-        print(f"Adjusting target_nodes to {min_required_nodes}.")
-        target_nodes = min_required_nodes
-
-    # If graph is smaller than target, return entire graph
-    if num_nodes <= target_nodes:
-        return graph.copy(), labels.copy(), node_indices.copy()
-
-    print(f"Creating class-aware subgraph with {target_nodes} nodes from {num_nodes} nodes...")
-    print(f"Ensuring at least {min_nodes_per_class} nodes per class ({num_classes} classes)...")
-
-    # Step 1: For each class, ensure we have at least min_nodes_per_class nodes
-    visited = set()
-    class_counts = {cls: 0 for cls in unique_classes}
-
-    # Get nodes by class
-    nodes_by_class = {cls: [] for cls in unique_classes}
-    for node in graph.nodes():
-        nodes_by_class[labels[node]].append(node)
-
-    # First, ensure minimum nodes per class
-    for cls in unique_classes:
-        class_nodes = nodes_by_class[cls]
-        if len(class_nodes) < min_nodes_per_class:
-            print(f"Warning: Class {cls} has only {len(class_nodes)} nodes, less than minimum {min_nodes_per_class}.")
-            # Add all nodes from this class
-            for node in class_nodes:
-                visited.add(node)
-                class_counts[cls] += 1
-        else:
-            # Randomly select min_nodes_per_class nodes from this class
-            selected = random.sample(class_nodes, min_nodes_per_class)
-            for node in selected:
-                visited.add(node)
-                class_counts[cls] += 1
-
-    print(f"After ensuring minimum per class: {len(visited)} nodes selected")
-    print(f"Class distribution: {class_counts}")
-
-    # Step 2: Fill up to target_nodes using BFS, prioritizing underrepresented classes
-    if len(visited) < target_nodes:
-        print(f"Filling subgraph from {len(visited)} to {target_nodes} nodes using BFS...")
-        # Create a queue starting from visited nodes
-        queue = list(visited)
-        iterations_without_progress = 0
-        max_iterations_without_progress = 1000
-
-        # Continue BFS until we have enough nodes
-        while queue and len(visited) < target_nodes:
-            current = queue.pop(0)
-            previous_visited_size = len(visited)
-
-            # Get neighbors and sort by class representation (prioritize underrepresented classes)
-            neighbors = list(graph.neighbors(current))
-            # Calculate class proportions for prioritization
-            if len(visited) > 0:
-                class_props = {cls: class_counts[cls] / len(visited) for cls in unique_classes}
-                target_prop = 1.0 / num_classes
-                # Sort neighbors: underrepresented classes first, then others
-                neighbors.sort(
-                    key=lambda n: (
-                        class_props.get(labels[n], 0) < target_prop,  # True (underrepresented) comes first
-                        -class_props.get(labels[n], 0),  # Then by how underrepresented (more negative = more underrepresented)
-                    ),
-                    reverse=True,
-                )
-            else:
-                random.shuffle(neighbors)  # Randomize if no visited nodes yet
-
-            for neighbor in neighbors:
-                if neighbor not in visited and len(visited) < target_nodes:
-                    # Always add nodes when below target
-                    neighbor_class = labels[neighbor]
-                    visited.add(neighbor)
-                    class_counts[neighbor_class] += 1
-                    queue.append(neighbor)
-
-            # Check if we made progress
-            if len(visited) == previous_visited_size:
-                iterations_without_progress += 1
-                if iterations_without_progress >= max_iterations_without_progress:
-                    print(f"Warning: BFS stopped making progress. Reached {len(visited)} nodes (target: {target_nodes})")
-                    # Try to add random nodes from underrepresented classes
-                    if len(visited) < target_nodes:
-                        all_nodes = set(graph.nodes())
-                        remaining_nodes = all_nodes - visited
-                        if remaining_nodes:
-                            # Add nodes from underrepresented classes first
-                            for cls in unique_classes:
-                                if len(visited) >= target_nodes:
-                                    break
-                                class_prop = class_counts[cls] / max(len(visited), 1)
-                                target_prop = 1.0 / num_classes
-                                if class_prop < target_prop:
-                                    class_candidates = [n for n in remaining_nodes if labels[n] == cls]
-                                    if class_candidates:
-                                        node_to_add = random.choice(class_candidates)
-                                        visited.add(node_to_add)
-                                        class_counts[cls] += 1
-                                        remaining_nodes.remove(node_to_add)
-                            # Fill remaining with any available nodes
-                            while len(visited) < target_nodes and remaining_nodes:
-                                node_to_add = random.choice(list(remaining_nodes))
-                                visited.add(node_to_add)
-                                class_counts[labels[node_to_add]] += 1
-                                remaining_nodes.remove(node_to_add)
-                    break
-            else:
-                iterations_without_progress = 0
-
-        print(f"After BFS filling: {len(visited)} nodes selected (target: {target_nodes})")
-
-    # Create subgraph from collected nodes
-    subgraph = graph.subgraph(visited).copy()
-
-    # Filter labels and node_indices to match subgraph nodes
-    visited_list = sorted(visited)  # Sort for consistent indexing
-    subgraph_labels = labels[visited_list]
-    subgraph_node_indices = node_indices[visited_list]
-
-    print(f"Subgraph created: {subgraph.number_of_nodes()} nodes, {subgraph.number_of_edges()} edges")
-    print(f"Final class distribution: {class_counts}")
-    print(f"Classes in subgraph: {len(np.unique(subgraph_labels))}")
-
-    # Verify all classes have at least min_nodes_per_class
-    final_class_counts = {cls: np.sum(subgraph_labels == cls) for cls in unique_classes}
-    for cls, count in final_class_counts.items():
-        if count < min_nodes_per_class:
-            print(f"Warning: Class {cls} has only {count} nodes in subgraph (minimum: {min_nodes_per_class})")
-
-    return subgraph, subgraph_labels, subgraph_node_indices
-
-
 def load_ogb_dataset(
     dataset_name: str = "ogbn-arxiv",
-    subgraph_size: int = None,
-    random_seed: int = None,
-    min_nodes_per_class: int = 5,
-    max_classes: int = None,
 ) -> Tuple[nx.Graph, np.ndarray, np.ndarray]:
     """
     Load OGB dataset and convert to NetworkX format.
@@ -416,43 +152,12 @@ def load_ogb_dataset(
     print(f"Number of classes: {len(np.unique(labels))}")
     print(f"Label distribution: {np.bincount(labels)}")
 
-    # Create subgraph if requested
-    if subgraph_size is not None and subgraph_size > 0:
-        graph, labels, node_indices = create_subgraph(
-            graph,
-            labels,
-            node_indices,
-            target_nodes=subgraph_size,
-            random_seed=random_seed,
-            min_nodes_per_class=min_nodes_per_class,
-            max_classes=max_classes,
-        )
-        print(f"After subgraph creation: {graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges")
-        print(f"Number of classes: {len(np.unique(labels))}")
-        print(f"Label distribution: {np.bincount(labels)}")
-
     return graph, labels, node_indices
 
 
-def load_polblogs_dataset(
-    subgraph_size: int = None,
-    random_seed: int = None,
-    min_nodes_per_class: int = 5,
-    max_classes: int = None,
-) -> Tuple[nx.Graph, np.ndarray, np.ndarray]:
+def load_polblogs_dataset() -> Tuple[nx.Graph, np.ndarray, np.ndarray]:
     """
     Load PolBlogs dataset from PyTorch Geometric and convert to NetworkX format.
-
-    Parameters:
-    -----------
-    subgraph_size : int
-        If specified, create a connected subgraph with this many nodes
-    random_seed : int
-        Random seed for reproducibility
-    min_nodes_per_class : int
-        Minimum number of nodes per class when creating subgraph
-    max_classes : int
-        Maximum number of classes to include in subgraph
 
     Returns:
     --------
@@ -520,43 +225,12 @@ def load_polblogs_dataset(
         print(f"Number of classes: {len(np.unique(labels))}")
         print(f"Label distribution: {np.bincount(labels)}")
 
-    # Create subgraph if requested
-    if subgraph_size is not None and subgraph_size > 0:
-        graph, labels, node_indices = create_subgraph(
-            graph,
-            labels,
-            node_indices,
-            target_nodes=subgraph_size,
-            random_seed=random_seed,
-            min_nodes_per_class=min_nodes_per_class,
-            max_classes=max_classes,
-        )
-        print(f"After subgraph creation: {graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges")
-        print(f"Number of classes: {len(np.unique(labels))}")
-        print(f"Label distribution: {np.bincount(labels)}")
-
     return graph, labels, node_indices
 
 
-def load_cora_dataset(
-    subgraph_size: int = None,
-    random_seed: int = None,
-    min_nodes_per_class: int = 5,
-    max_classes: int = None,
-) -> Tuple[nx.Graph, np.ndarray, np.ndarray]:
+def load_cora_dataset() -> Tuple[nx.Graph, np.ndarray, np.ndarray]:
     """
     Load CORA dataset and convert to NetworkX format.
-
-    Parameters:
-    -----------
-    subgraph_size : int
-        If specified, create a connected subgraph with this many nodes
-    random_seed : int
-        Random seed for reproducibility
-    min_nodes_per_class : int
-        Minimum number of nodes per class when creating subgraph
-    max_classes : int
-        Maximum number of classes to include in subgraph
 
     Returns:
     --------
@@ -588,21 +262,6 @@ def load_cora_dataset(
     print(f"Number of classes: {len(np.unique(labels))}")
     print(f"Label distribution: {np.bincount(labels)}")
 
-    # Create subgraph if requested
-    if subgraph_size is not None and subgraph_size > 0:
-        graph, labels, node_indices = create_subgraph(
-            graph,
-            labels,
-            node_indices,
-            target_nodes=subgraph_size,
-            random_seed=random_seed,
-            min_nodes_per_class=min_nodes_per_class,
-            max_classes=max_classes,
-        )
-        print(f"After subgraph creation: {graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges")
-        print(f"Number of classes: {len(np.unique(labels))}")
-        print(f"Label distribution: {np.bincount(labels)}")
-
     return graph, labels, node_indices
 
 
@@ -611,12 +270,6 @@ def load_dataset(
     dataset_type: str,
     k_neighbors: int = 15,
     datasets_path: str = None,
-    subgraph_size: int = None,
-    random_seed: int = None,
-    min_nodes_per_class: int = 5,
-    max_classes: int = None,
-    neuroseed_task: str = "edit_distance",
-    neuroseed_split: str = "train",
 ) -> Tuple[nx.Graph, np.ndarray, np.ndarray]:
     """
     Load dataset based on type and return graph, labels, and node indices.
@@ -626,15 +279,11 @@ def load_dataset(
     dataset_name : str
         Name of the dataset
     dataset_type : str
-        Type of dataset ("AS", "ogbn-arxiv", "neuroseed", or PoincareMaps dataset name)
+        Type of dataset ("AS", "ogbn-arxiv", or PoincareMaps dataset name)
     k_neighbors : int
-        Number of neighbors for PoincareMaps/NeuroSEED KNN graph construction
+        Number of neighbors for PoincareMaps KNN graph construction
     datasets_path : str
         Path to PoincareMaps datasets directory
-    neuroseed_task : str
-        Task name for NeuroSEED dataset (e.g., "edit_distance", "closest_string")
-    neuroseed_split : str
-        Split for NeuroSEED dataset ("train", "val", "test")
 
     Returns:
     --------
@@ -648,32 +297,11 @@ def load_dataset(
     if dataset_type == "AS":
         raise ValueError("AS dataset does not contain node labels for classification")
     elif dataset_type == "ogbn-arxiv":
-        return load_ogb_dataset(
-            "ogbn-arxiv",
-            subgraph_size=subgraph_size,
-            random_seed=random_seed,
-            min_nodes_per_class=min_nodes_per_class,
-            max_classes=max_classes,
-        )
+        return load_ogb_dataset("ogbn-arxiv")
     elif dataset_type == "polblogs":
-        return load_polblogs_dataset(
-            subgraph_size=subgraph_size,
-            random_seed=random_seed,
-            min_nodes_per_class=min_nodes_per_class,
-            max_classes=max_classes,
-        )
+        return load_polblogs_dataset()
     elif dataset_type == "Cora":
-        return load_cora_dataset(
-            subgraph_size=subgraph_size,
-            random_seed=random_seed,
-            min_nodes_per_class=min_nodes_per_class,
-            max_classes=max_classes,
-        )
-    elif dataset_type == "neuroseed":
-        # For NeuroSEED, we DON'T use load_neuroseed_dataset here
-        # because we need to handle train/test splits properly in main()
-        # This is a placeholder - actual loading happens in main()
-        return None, None, None
+        return load_cora_dataset()
     else:
         # PoincareMaps dataset
         if datasets_path is None:
@@ -697,6 +325,7 @@ def train_hyperbolic_embeddings(
     embedding_type: str = "poincare_embeddings",
     model_dir: str = "saved_models/default",
     dim: int = 2,
+    random_seed: int = None,
 ) -> Tuple[np.ndarray, str]:
     """
     Train hyperbolic embeddings for the graph with dataset size-based configurations.
@@ -711,6 +340,8 @@ def train_hyperbolic_embeddings(
         Directory to save the model
     dim : int
         Embedding dimension
+    random_seed : int
+        Random seed for reproducibility (default: None)
 
     Returns:
     --------
@@ -719,7 +350,20 @@ def train_hyperbolic_embeddings(
     embedding_space : str
         Native embedding space of the model
     """
-    print(f"\nTraining {embedding_type} embeddings...")
+    # Set random seed if provided
+    if random_seed is not None:
+        np.random.seed(random_seed)
+        random.seed(random_seed)
+        try:
+            import torch
+
+            torch.manual_seed(random_seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(random_seed)
+        except ImportError:
+            pass
+
+    print(f"\nTraining {embedding_type} embeddings (seed={random_seed})...")
 
     # Ensure graph nodes are 0-based consecutive (critical for adjacency matrix creation)
     graph_nodes = sorted(graph.nodes())
@@ -818,10 +462,12 @@ def evaluate_knn(
     y_train: np.ndarray,
     y_test: np.ndarray,
     k_values: list = [3, 5, 7, 10],
-    n_iterations: int = 1,
 ) -> dict:
     """
     Evaluate KNN classification with different k values using hyperbolic distance.
+
+    This function performs a single evaluation pass. For multiple iterations,
+    call this function multiple times with different embeddings.
 
     Parameters:
     -----------
@@ -835,64 +481,33 @@ def evaluate_knn(
         Test labels
     k_values : list
         List of k values to test
-    n_iterations : int
-        Number of iterations to run for computing mean and std (default: 1)
 
     Returns:
     --------
     results : dict
-        Dictionary containing results for each k value with mean and std
+        Dictionary containing results for each k value
     """
     results = {}
 
     for k in k_values:
-        print(f"\nEvaluating KNN with k={k}...")
+        # Create KNN classifier with hyperbolic distance
+        knn = KNeighborsClassifier(n_neighbors=k, metric=hyperbolic_distance, algorithm="brute")
 
-        # Store metrics for all iterations
-        accuracies = []
-        precisions = []
-        recalls = []
-        f1_scores = []
+        # Fit and predict
+        knn.fit(X_train, y_train)
+        y_pred = knn.predict(X_test)
 
-        for iteration in range(n_iterations):
-            if n_iterations > 1:
-                print(f"  Iteration {iteration + 1}/{n_iterations}...", end="\r")
+        # Compute metrics
+        accuracy = accuracy_score(y_test, y_pred)
+        precision = precision_score(y_test, y_pred, average="weighted", zero_division=0)
+        recall = recall_score(y_test, y_pred, average="weighted", zero_division=0)
+        f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)
 
-            # Create KNN classifier with hyperbolic distance
-            knn = KNeighborsClassifier(n_neighbors=k, metric=hyperbolic_distance, algorithm="brute")
-
-            # Fit and predict
-            knn.fit(X_train, y_train)
-            y_pred = knn.predict(X_test)
-
-            # Compute metrics
-            accuracy = accuracy_score(y_test, y_pred)
-            precision = precision_score(y_test, y_pred, average="weighted", zero_division=0)
-            recall = recall_score(y_test, y_pred, average="weighted", zero_division=0)
-            f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)
-
-            accuracies.append(accuracy)
-            precisions.append(precision)
-            recalls.append(recall)
-            f1_scores.append(f1)
-
-        if n_iterations > 1:
-            print(f"  Completed {n_iterations} iterations")
-
-        # Calculate mean and std
         results[k] = {
-            "accuracy_mean": np.mean(accuracies),
-            "accuracy_std": np.std(accuracies),
-            "precision_mean": np.mean(precisions),
-            "precision_std": np.std(precisions),
-            "recall_mean": np.mean(recalls),
-            "recall_std": np.std(recalls),
-            "f1_mean": np.mean(f1_scores),
-            "f1_std": np.std(f1_scores),
-            "accuracies": accuracies,
-            "precisions": precisions,
-            "recalls": recalls,
-            "f1_scores": f1_scores,
+            "accuracy": accuracy,
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
         }
 
     return results
@@ -914,7 +529,6 @@ def main():
             "ogbn-arxiv",
             "polblogs",
             "Cora",
-            "neuroseed",
         ],
         help="Dataset to use",
     )
@@ -969,40 +583,16 @@ def main():
         help="Path to PoincareMaps datasets directory.",
     )
     parser.add_argument(
-        "--subgraph_size",
-        type=int,
-        default=None,
-        help="If specified, create a connected subgraph with this many nodes (useful for large datasets like ogbn-arxiv).",
-    )
-    parser.add_argument(
-        "--min_nodes_per_class",
-        type=int,
-        default=5,
-        help="Minimum number of nodes per class when creating subgraph (default: 5).",
-    )
-    parser.add_argument(
-        "--max_classes",
-        type=int,
-        default=4,
-        help="Maximum number of classes to include in subgraph (default: 4). Set to None to include all classes.",
-    )
-    parser.add_argument(
-        "--neuroseed_task",
-        type=str,
-        default="edit_distance",
-        choices=["edit_distance", "closest_string", "hierarchical_clustering", "multiple_alignment"],
-        help="Task name for NeuroSEED dataset (only used when dataset=neuroseed).",
-    )
-    parser.add_argument(
-        "--use_predefined_splits",
-        action="store_true",
-        help="Use pre-defined train/test splits for NeuroSEED (requires real data). If not set, uses synthetic data with random split.",
-    )
-    parser.add_argument(
         "--n_iterations",
         type=int,
         default=10,
         help="Number of iterations to run for computing mean and std of metrics (default: 10).",
+    )
+    parser.add_argument(
+        "--output_file",
+        type=str,
+        default=None,
+        help="Path to save results (default: test/other/results/{dataset}/{embedding_type}_knn_results.txt).",
     )
 
     args = parser.parse_args()
@@ -1011,120 +601,121 @@ def main():
     if args.model_dir is None:
         args.model_dir = f"saved_models/{args.dataset}"
 
-    # Special handling for NeuroSEED with pre-defined splits
-    if args.dataset == "neuroseed" and args.use_predefined_splits:
-        print("\n" + "=" * 70)
-        print("Using NeuroSEED with Pre-defined Train/Test Splits")
-        print("=" * 70)
-
-        try:
-            # Load pre-defined splits
-            result = load_neuroseed_dataset(
-                task=args.neuroseed_task,
-                k_neighbors=args.k_neighbors,
-                seed=args.random_state,
-                use_predefined_splits=True,
-            )
-
-            # Unpack the results
-            train_graph, test_graph, train_labels, test_labels, train_indices, test_indices = result
-
-            # Train embeddings on training graph
-            print("\nTraining embeddings on TRAINING set...")
-            train_embeddings, embedding_space = train_hyperbolic_embeddings(
-                graph=train_graph,
-                embedding_type=args.embedding_type,
-                model_dir=os.path.join(args.model_dir, "train"),
-                dim=args.dim,
-            )
-
-            # Train embeddings on test graph (same model, different graph)
-            print("\nTraining embeddings on TEST set...")
-            test_embeddings, _ = train_hyperbolic_embeddings(
-                graph=test_graph,
-                embedding_type=args.embedding_type,
-                model_dir=os.path.join(args.model_dir, "test"),
-                dim=args.dim,
-            )
-
-            # Use the full train/test sets (no re-splitting!)
-            X_train, y_train = train_embeddings, train_labels
-            X_test, y_test = test_embeddings, test_labels
-
-            print("\n✓ Using pre-defined splits:")
-            print(f"  Training set: {len(X_train)} samples")
-            print(f"  Test set: {len(X_test)} samples")
-
-        except Exception as e:
-            print(f"Error loading NeuroSEED with pre-defined splits: {e}")
-            print("Make sure real NeuroSEED data is available in data/neuroseed/")
-            print("Falling back to synthetic data with random split...")
-            args.use_predefined_splits = False
-
-    # Standard loading for all other cases
-    if not (args.dataset == "neuroseed" and args.use_predefined_splits):
-        # Load dataset
-        try:
-            if args.dataset == "neuroseed":
-                # Use synthetic data with single graph
-                graph, labels, node_indices = load_neuroseed_dataset(
-                    task=args.neuroseed_task,
-                    num_samples=args.subgraph_size or 1000,
-                    k_neighbors=args.k_neighbors,
-                    seed=args.random_state,
-                    use_predefined_splits=False,
-                )
-            else:
-                graph, labels, node_indices = load_dataset(
-                    dataset_name=args.dataset,
-                    dataset_type=args.dataset,
-                    k_neighbors=args.k_neighbors,
-                    datasets_path=args.datasets_path,
-                    subgraph_size=args.subgraph_size,
-                    random_seed=args.random_state,
-                    min_nodes_per_class=args.min_nodes_per_class,
-                    max_classes=args.max_classes if args.max_classes > 0 else None,
-                    neuroseed_task=args.neuroseed_task,
-                    neuroseed_split="train",  # Unused for neuroseed now
-                )
-        except ValueError as e:
-            print(f"Error: {e}")
-            return
-
-        # Train embeddings
-        embeddings, embedding_space = train_hyperbolic_embeddings(
-            graph=graph,
-            embedding_type=args.embedding_type,
-            model_dir=args.model_dir,
-            dim=args.dim,
+    # Load dataset
+    try:
+        graph, labels, node_indices = load_dataset(
+            dataset_name=args.dataset,
+            dataset_type=args.dataset,
+            k_neighbors=args.k_neighbors,
+            datasets_path=args.datasets_path,
         )
+    except ValueError as e:
+        print(f"Error: {e}")
+        return
 
-        # Split data into train and test sets
-        print(f"\nSplitting data into train/test sets (test_size={args.test_size})...")
-        X_train, X_test, y_train, y_test, train_indices, test_indices = train_test_split(
-            embeddings,
-            labels,
-            node_indices,
-            test_size=args.test_size,
-            random_state=args.random_state,
-            stratify=labels,
-        )
+    # Train embeddings
+    embeddings, embedding_space = train_hyperbolic_embeddings(
+        graph=graph,
+        embedding_type=args.embedding_type,
+        model_dir=args.model_dir,
+        dim=args.dim,
+    )
 
-        print(f"Training set: {len(X_train)} samples")
-        print(f"Test set: {len(X_test)} samples")
+    # Split data into train and test sets
+    print(f"\nSplitting data into train/test sets (test_size={args.test_size})...")
+    X_train, X_test, y_train, y_test, train_indices, test_indices = train_test_split(
+        embeddings,
+        labels,
+        node_indices,
+        test_size=args.test_size,
+        random_state=args.random_state,
+        stratify=labels,
+    )
 
-    # Evaluate KNN with different k values
-    results = evaluate_knn(X_train, X_test, y_train, y_test, k_values=args.k_values, n_iterations=args.n_iterations)
+    print(f"Training set: {len(X_train)} samples")
+    print(f"Test set: {len(X_test)} samples")
+
+    # Print number of classes and test set size
+    print(f"Number of test nodes: {len(X_test)}")
+
+    # Evaluate KNN with different k values across multiple iterations
+    print(f"\n{'=' * 90}")
+    print(f"Running {args.n_iterations} iteration(s) with different embedding seeds")
+    print(f"{'=' * 90}")
+
+    # Store results across all iterations
+    all_results = {k: {"accuracies": [], "precisions": [], "recalls": [], "f1_scores": []} for k in args.k_values}
+
+    for iteration in range(args.n_iterations):
+        print(f"\n{'*' * 90}")
+        print(f"ITERATION {iteration + 1}/{args.n_iterations}")
+        print(f"{'*' * 90}")
+
+        # Generate embeddings with different random seed for each iteration
+        iteration_seed = args.random_state + iteration
+
+        if args.n_iterations > 1:
+            # Standard case: re-train embeddings on the same graph with different seed
+            print(f"\nRe-training embeddings with seed={iteration_seed}...")
+            embeddings_iter, _ = train_hyperbolic_embeddings(
+                graph=graph,
+                embedding_type=args.embedding_type,
+                model_dir=os.path.join(args.model_dir, f"iter{iteration}"),
+                dim=args.dim,
+                random_seed=iteration_seed,
+            )
+
+            # Use the same train/test split indices from the first iteration
+            X_train_iter = embeddings_iter[train_indices]
+            X_test_iter = embeddings_iter[test_indices]
+        else:
+            # Single iteration: use the already computed embeddings
+            X_train_iter = X_train
+            X_test_iter = X_test
+
+        # Evaluate KNN for this iteration
+        print(f"\nEvaluating KNN for iteration {iteration + 1}...")
+        iter_results = evaluate_knn(X_train_iter, X_test_iter, y_train, y_test, k_values=args.k_values)
+
+        # Store results
+        for k in args.k_values:
+            all_results[k]["accuracies"].append(iter_results[k]["accuracy"])
+            all_results[k]["precisions"].append(iter_results[k]["precision"])
+            all_results[k]["recalls"].append(iter_results[k]["recall"])
+            all_results[k]["f1_scores"].append(iter_results[k]["f1"])
+
+        # Print iteration results
+        if args.n_iterations > 1:
+            print(f"\nIteration {iteration + 1} Results:")
+            print(f"{'k':<5} {'Accuracy':<12} {'Precision':<12} {'Recall':<12} {'F1-Score':<12}")
+            print("-" * 90)
+            for k in sorted(args.k_values):
+                r = iter_results[k]
+                print(f"{k:<5} " f"{r['accuracy']:<12.4f} " f"{r['precision']:<12.4f} " f"{r['recall']:<12.4f} " f"{r['f1']:<12.4f}")
+
+    # Compute mean and std across iterations
+    final_results = {}
+    for k in args.k_values:
+        final_results[k] = {
+            "accuracy_mean": np.mean(all_results[k]["accuracies"]),
+            "accuracy_std": np.std(all_results[k]["accuracies"]),
+            "precision_mean": np.mean(all_results[k]["precisions"]),
+            "precision_std": np.std(all_results[k]["precisions"]),
+            "recall_mean": np.mean(all_results[k]["recalls"]),
+            "recall_std": np.std(all_results[k]["recalls"]),
+            "f1_mean": np.mean(all_results[k]["f1_scores"]),
+            "f1_std": np.std(all_results[k]["f1_scores"]),
+        }
 
     # Print summary
     print("\n" + "=" * 90)
-    print(f"SUMMARY OF RESULTS (Mean ± Std over {args.n_iterations} iterations)")
+    print(f"SUMMARY OF RESULTS (Mean ± Std over {args.n_iterations} iteration(s))")
     print("=" * 90)
     if args.n_iterations > 1:
         print(f"{'k':<5} {'Accuracy':<20} {'Precision':<20} {'Recall':<20} {'F1-Score':<20}")
         print("-" * 90)
-        for k in sorted(results.keys()):
-            r = results[k]
+        for k in sorted(final_results.keys()):
+            r = final_results[k]
             print(
                 f"{k:<5} "
                 f"{r['accuracy_mean']:.4f} ± {r['accuracy_std']:.4f}  "
@@ -1135,8 +726,8 @@ def main():
     else:
         print(f"{'k':<5} {'Accuracy':<12} {'Precision':<12} {'Recall':<12} {'F1-Score':<12}")
         print("-" * 90)
-        for k in sorted(results.keys()):
-            r = results[k]
+        for k in sorted(final_results.keys()):
+            r = final_results[k]
             print(
                 f"{k:<5} "
                 f"{r['accuracy_mean']:<12.4f} "
@@ -1147,8 +738,95 @@ def main():
     print("=" * 90)
 
     # Find best k
-    best_k = max(results.keys(), key=lambda k: results[k]["accuracy_mean"])
-    print(f"\nBest k value: {best_k} (Accuracy: {results[best_k]['accuracy_mean']:.4f} ± {results[best_k]['accuracy_std']:.4f})")
+    best_k = max(final_results.keys(), key=lambda k: final_results[k]["accuracy_mean"])
+    print(
+        f"\nBest k value: {best_k} (Accuracy: {final_results[best_k]['accuracy_mean']:.4f} ± {final_results[best_k]['accuracy_std']:.4f})"
+    )
+
+    # Save results to file
+    if args.output_file is None:
+        # Create default output path
+        output_dir = f"test/other/results/{args.dataset}"
+        os.makedirs(output_dir, exist_ok=True)
+        output_file = os.path.join(output_dir, f"{args.embedding_type}_knn_results.txt")
+    else:
+        output_file = args.output_file
+        # Create parent directory if it doesn't exist
+        os.makedirs(os.path.dirname(output_file), exist_ok=True)
+
+    with open(output_file, "w") as f:
+        # Write header with experiment configuration
+        f.write("=" * 90 + "\n")
+        f.write("HYPERBOLIC KNN CLASSIFICATION RESULTS\n")
+        f.write("=" * 90 + "\n")
+        f.write(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+
+        f.write("CONFIGURATION:\n")
+        f.write("-" * 90 + "\n")
+        f.write(f"Dataset: {args.dataset}\n")
+        f.write(f"Embedding Type: {args.embedding_type}\n")
+        f.write(f"Embedding Dimension: {args.dim}\n")
+        f.write(f"Test Size: {args.test_size}\n")
+        f.write(f"Random State: {args.random_state}\n")
+        f.write(f"Number of Iterations: {args.n_iterations}\n")
+        f.write(f"K Values: {args.k_values}\n")
+        f.write(f"K Neighbors (graph construction): {args.k_neighbors}\n")
+        f.write(f"Number of Graph Nodes: {graph.number_of_nodes()}\n")
+        f.write(f"Number of Graph Edges: {graph.number_of_edges()}\n")
+        f.write(f"Number of Classes: {len(np.unique(labels))}\n")
+        f.write(f"Training Set Size: {len(X_train)}\n")
+        f.write(f"Test Set Size: {len(X_test)}\n")
+        f.write("\n")
+
+        # Write summary results
+        f.write("=" * 90 + "\n")
+        f.write(f"SUMMARY OF RESULTS (Mean ± Std over {args.n_iterations} iteration(s))\n")
+        f.write("=" * 90 + "\n")
+
+        if args.n_iterations > 1:
+            f.write(f"{'k':<5} {'Accuracy':<20} {'Precision':<20} {'Recall':<20} {'F1-Score':<20}\n")
+            f.write("-" * 90 + "\n")
+            for k in sorted(final_results.keys()):
+                r = final_results[k]
+                f.write(
+                    f"{k:<5} "
+                    f"{r['accuracy_mean']:.4f} ± {r['accuracy_std']:.4f}  "
+                    f"{r['precision_mean']:.4f} ± {r['precision_std']:.4f}  "
+                    f"{r['recall_mean']:.4f} ± {r['recall_std']:.4f}  "
+                    f"{r['f1_mean']:.4f} ± {r['f1_std']:.4f}\n"
+                )
+        else:
+            f.write(f"{'k':<5} {'Accuracy':<12} {'Precision':<12} {'Recall':<12} {'F1-Score':<12}\n")
+            f.write("-" * 90 + "\n")
+            for k in sorted(final_results.keys()):
+                r = final_results[k]
+                f.write(
+                    f"{k:<5} "
+                    f"{r['accuracy_mean']:<12.4f} "
+                    f"{r['precision_mean']:<12.4f} "
+                    f"{r['recall_mean']:<12.4f} "
+                    f"{r['f1_mean']:<12.4f}\n"
+                )
+        f.write("=" * 90 + "\n\n")
+
+        # Write best k
+        f.write(
+            f"Best k value: {best_k} (Accuracy: {final_results[best_k]['accuracy_mean']:.4f} ± {final_results[best_k]['accuracy_std']:.4f})\n\n"
+        )
+
+        # Write detailed iteration results if multiple iterations
+        if args.n_iterations > 1:
+            f.write("=" * 90 + "\n")
+            f.write("DETAILED ITERATION RESULTS\n")
+            f.write("=" * 90 + "\n")
+            for k in sorted(args.k_values):
+                f.write(f"\nk = {k}:\n")
+                f.write(f"  Accuracies:  {all_results[k]['accuracies']}\n")
+                f.write(f"  Precisions:  {all_results[k]['precisions']}\n")
+                f.write(f"  Recalls:     {all_results[k]['recalls']}\n")
+                f.write(f"  F1-Scores:   {all_results[k]['f1_scores']}\n")
+
+    print(f"\n✓ Results saved to: {output_file}")
 
 
 if __name__ == "__main__":
