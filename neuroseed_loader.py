@@ -7,166 +7,192 @@ pre-computed hyperbolic embeddings and labels for various biological datasets.
 The NeuroSEED dataset is from the paper:
 "NeuroSEED: Geometric Deep Learning for Sequence-to-Sequence Tasks"
 https://github.com/gcorso/NeuroSEED
+
+Based on: https://github.com/pchlenski/hyperdt/blob/main/hyperdt/legacy/dataloaders/neuroseed.py
 """
 
 import os
-import pickle
 from typing import Tuple
 
+import anndata
 import networkx as nx
 import numpy as np
 import torch
+from sklearn.model_selection import train_test_split
 
 
 class NeuroSEEDLoader:
     """
-    Loader for NeuroSEED dataset.
-    
+    Loader for NeuroSEED dataset from h5ad files.
+
     The NeuroSEED dataset provides pre-computed hyperbolic embeddings
-    for biological sequence data. For the purposes of KNN classification,
-    we need to construct a graph from these embeddings.
+    for biological sequence data (e.g., American Gut microbiome data).
     """
 
-    def __init__(self, data_dir: str = "./data/neuroseed"):
+    def __init__(self, data_file: str = "data/neuroseed/americangut.h5ad"):
         """
         Initialize the NeuroSEED loader.
 
         Parameters:
         -----------
-        data_dir : str
-            Directory containing the NeuroSEED dataset files
+        data_file : str
+            Path to the h5ad file containing the NeuroSEED dataset
         """
-        self.data_dir = data_dir
-        os.makedirs(data_dir, exist_ok=True)
+        self.data_file = data_file
+        self._adata = None
 
-    def load_embeddings_and_labels(
-        self, 
-        split: str = "train",
-        task: str = "edit_distance",
-        num_samples: int = None,
-        seed: int = 42
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    def _load_adata(self):
+        """Load the h5ad file if not already loaded."""
+        if self._adata is None:
+            if not os.path.exists(self.data_file):
+                raise FileNotFoundError(
+                    f"Could not find NeuroSEED data file at {self.data_file}. "
+                    f"Please ensure the NeuroSEED dataset is properly downloaded."
+                )
+            print(f"Loading NeuroSEED data from {self.data_file}...")
+            self._adata = anndata.read_h5ad(self.data_file)
+            print(f"Loaded data with shape: {self._adata.shape}")
+
+    def get_data(
+        self,
+        seed: int,
+        dimension: int,
+        num_samples: int = 1250,
+        convert_to_poincare: bool = True,
+        min_label_count: int = 1000,
+        taxonomy_level: str = "taxonomy_1",
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
-        Load pre-computed embeddings and labels from NeuroSEED dataset.
+        Get train/test split of NeuroSEED data.
 
         Parameters:
         -----------
-        split : str
-            Dataset split to load ("train", "val", or "test")
-        task : str
-            Task name (e.g., "edit_distance", "closest_string")
-        num_samples : int
-            Number of samples to load (None for all)
         seed : int
-            Random seed for sampling
+            Random seed for reproducibility
+        dimension : int
+            Dimensionality of the hyperbolic embeddings
+        num_samples : int
+            Number of samples to draw
+        convert_to_poincare : bool
+            If True, use Poincaré ball coordinates; if False, use hyperboloid
+        min_label_count : int
+            Minimum number of samples per label to keep (for filtering)
+        taxonomy_level : str
+            Taxonomy level to use for labels (e.g., "taxonomy_1")
 
         Returns:
         --------
-        embeddings : np.ndarray
-            Pre-computed embeddings (N, D)
-        labels : np.ndarray
-            Labels (N,)
+        X_train : np.ndarray
+            Training embeddings
+        X_test : np.ndarray
+            Testing embeddings
+        y_train : np.ndarray
+            Training labels
+        y_test : np.ndarray
+            Testing labels
         """
-        # Try to load pre-computed embeddings
-        embeddings_path = os.path.join(self.data_dir, task, f"{split}_embeddings.npy")
-        labels_path = os.path.join(self.data_dir, task, f"{split}_labels.npy")
+        self._load_adata()
 
-        if os.path.exists(embeddings_path) and os.path.exists(labels_path):
-            embeddings = np.load(embeddings_path)
-            labels = np.load(labels_path)
-            print(f"Loaded {len(embeddings)} samples from {embeddings_path}")
+        # Keep only abundant taxa
+        labels = self._adata.var[taxonomy_level]
+        labels_counts = labels.value_counts()
+        keep = labels_counts[labels_counts > min_label_count].index
+        labels_filtered = labels[labels.isin(keep)]
+
+        print(f"Filtered labels: {len(labels_filtered)} samples with {len(keep)} classes")
+        print(f"Classes: {keep.tolist()}")
+
+        # Set seed and get indices randomly
+        np.random.seed(seed)
+
+        # Draw indices from filtered labels
+        indices = np.random.choice(labels_filtered.index, num_samples, replace=False)
+
+        # Get embeddings
+        if convert_to_poincare:
+            embed_name = f"component_embeddings_poincare_{dimension}"
         else:
-            print(f"Warning: Could not find pre-computed embeddings at {embeddings_path}")
-            print("Attempting to load raw data and generate synthetic embeddings...")
-            embeddings, labels = self._generate_synthetic_data(num_samples or 1000, seed)
+            embed_name = f"component_embeddings_hyperboloid_{dimension}"
 
-        # Sample if requested
-        if num_samples is not None and num_samples < len(embeddings):
-            np.random.seed(seed)
-            indices = np.random.choice(len(embeddings), num_samples, replace=False)
-            embeddings = embeddings[indices]
-            labels = labels[indices]
+        if embed_name not in self._adata.varm:
+            raise ValueError(f"Embedding '{embed_name}' not found in dataset. " f"Available embeddings: {list(self._adata.varm.keys())}")
 
-        return embeddings, labels
+        data = self._adata.varm[embed_name].loc[indices]
+        labels = self._adata.var[taxonomy_level].astype("category").cat.codes.loc[indices]
 
-    def _generate_synthetic_data(
-        self, 
-        num_samples: int = 1000, 
-        seed: int = 42
-    ) -> Tuple[np.ndarray, np.ndarray]:
+        # Convert to numpy if needed
+        if hasattr(data, "values"):
+            data = data.values
+        if hasattr(labels, "values"):
+            labels = labels.values
+
+        # Train-test split
+        X_train, X_test, y_train, y_test = train_test_split(data, labels, test_size=0.2, random_state=seed)
+
+        return X_train, X_test, y_train, y_test
+
+    def get_training_data(
+        self, class_label: int, seed: int, num_samples: int = 1250, convert_to_poincare: bool = True
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Generate synthetic hyperbolic embeddings for testing purposes.
-
-        This is a fallback when the actual NeuroSEED dataset is not available.
-        It generates random embeddings in the Poincaré disk with clustered labels.
+        Get training data from NeuroSEED dataset.
 
         Parameters:
         -----------
-        num_samples : int
-            Number of samples to generate
+        class_label : int
+            Dimensionality of the hyperbolic space (serves as the "class label")
         seed : int
             Random seed
+        num_samples : int
+            Total number of samples (before train/test split)
+        convert_to_poincare : bool
+            If True, returns data in Poincaré ball coordinates
+            If False, returns data in hyperboloid coordinates
 
         Returns:
         --------
-        embeddings : np.ndarray
-            Synthetic embeddings in Poincaré disk (N, 2)
-        labels : np.ndarray
-            Synthetic labels (N,)
+        data : torch.Tensor
+            Training embeddings
+        labels : torch.Tensor
+            Training labels
         """
-        np.random.seed(seed)
-        print(f"Generating {num_samples} synthetic hyperbolic embeddings...")
+        X_train, _, y_train, _ = self.get_data(
+            seed=seed, dimension=class_label, num_samples=num_samples, convert_to_poincare=convert_to_poincare
+        )
+        return torch.as_tensor(X_train), torch.as_tensor(y_train, dtype=int).flatten()
 
-        # Generate embeddings in Poincaré disk (2D for visualization)
-        # Create clusters in hyperbolic space
-        num_classes = 4
-        samples_per_class = num_samples // num_classes
+    def get_testing_data(
+        self, class_label: int, seed: int, num_samples: int = 1250, convert_to_poincare: bool = True
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Get testing data from NeuroSEED dataset.
 
-        embeddings_list = []
-        labels_list = []
+        Parameters:
+        -----------
+        class_label : int
+            Dimensionality of the hyperbolic space (serves as the "class label")
+        seed : int
+            Random seed
+        num_samples : int
+            Total number of samples (before train/test split)
+        convert_to_poincare : bool
+            If True, returns data in Poincaré ball coordinates
+            If False, returns data in hyperboloid coordinates
 
-        # Create clusters at different positions in the Poincaré disk
-        cluster_centers = [
-            np.array([0.3, 0.3]),
-            np.array([-0.3, 0.3]),
-            np.array([0.3, -0.3]),
-            np.array([-0.3, -0.3]),
-        ]
-
-        for class_idx in range(num_classes):
-            center = cluster_centers[class_idx]
-            # Generate points around the cluster center
-            for _ in range(samples_per_class):
-                # Add Gaussian noise in tangent space
-                noise = np.random.randn(2) * 0.15
-                point = center + noise
-                # Project back to Poincaré disk (norm < 1)
-                norm = np.linalg.norm(point)
-                if norm >= 0.95:
-                    point = point / norm * 0.95
-                embeddings_list.append(point)
-                labels_list.append(class_idx)
-
-        embeddings = np.array(embeddings_list)
-        labels = np.array(labels_list)
-
-        # Shuffle
-        indices = np.random.permutation(len(embeddings))
-        embeddings = embeddings[indices]
-        labels = labels[indices]
-
-        print(f"Generated synthetic data with {num_classes} classes")
-        print(f"Embeddings shape: {embeddings.shape}")
-        print(f"Labels distribution: {np.bincount(labels)}")
-
-        return embeddings, labels
+        Returns:
+        --------
+        data : torch.Tensor
+            Testing embeddings
+        labels : torch.Tensor
+            Testing labels
+        """
+        _, X_test, _, y_test = self.get_data(
+            seed=seed, dimension=class_label, num_samples=num_samples, convert_to_poincare=convert_to_poincare
+        )
+        return torch.as_tensor(X_test), torch.as_tensor(y_test, dtype=int).flatten()
 
     def embeddings_to_graph(
-        self, 
-        embeddings: np.ndarray,
-        labels: np.ndarray,
-        k_neighbors: int = 10,
-        distance_metric: str = "poincare"
+        self, embeddings: np.ndarray, labels: np.ndarray, k_neighbors: int = 10, distance_metric: str = "poincare"
     ) -> Tuple[nx.Graph, np.ndarray, np.ndarray]:
         """
         Convert embeddings to a k-NN graph.
@@ -202,6 +228,7 @@ class NeuroSEEDLoader:
             distances = self._compute_poincare_distances(embeddings)
         else:
             from sklearn.metrics.pairwise import euclidean_distances
+
             distances = euclidean_distances(embeddings)
 
         # For each node, connect to k nearest neighbors
@@ -214,7 +241,7 @@ class NeuroSEEDLoader:
         node_indices = np.arange(num_nodes)
 
         print(f"Graph created: {graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges")
-        
+
         # Check connectivity
         if not nx.is_connected(graph):
             num_components = nx.number_connected_components(graph)
@@ -244,171 +271,64 @@ class NeuroSEEDLoader:
         distances = HyperbolicConversions.compute_distances(embeddings, space="poincare")
         return distances
 
-    def load_as_networkx(
-        self,
-        split: str = "train",
-        task: str = "edit_distance",
-        num_samples: int = None,
-        k_neighbors: int = 10,
-        seed: int = 42,
-    ) -> Tuple[nx.Graph, np.ndarray, np.ndarray, dict]:
-        """
-        Load NeuroSEED data and convert to NetworkX graph.
 
-        Parameters:
-        -----------
-        split : str
-            Dataset split ("train", "val", or "test")
-        task : str
-            Task name
-        num_samples : int
-            Number of samples to load
-        k_neighbors : int
-            Number of neighbors for k-NN graph construction
-        seed : int
-            Random seed
-
-        Returns:
-        --------
-        graph : nx.Graph
-            NetworkX graph
-        labels : np.ndarray
-            Node labels
-        node_indices : np.ndarray
-            Node indices
-        metadata : dict
-            Dataset metadata
-        """
-        # Load embeddings and labels
-        embeddings, labels = self.load_embeddings_and_labels(
-            split=split,
-            task=task,
-            num_samples=num_samples,
-            seed=seed
-        )
-
-        # Convert to graph
-        graph, labels, node_indices = self.embeddings_to_graph(
-            embeddings,
-            labels,
-            k_neighbors=k_neighbors,
-            distance_metric="poincare"
-        )
-
-        # Create metadata
-        metadata = {
-            "dataset_name": f"neuroseed_{task}",
-            "split": split,
-            "num_samples": len(labels),
-            "num_classes": len(np.unique(labels)),
-            "k_neighbors": k_neighbors,
-            "embedding_dim": embeddings.shape[1],
-        }
-
-        return graph, labels, node_indices, metadata
+# ============================================================================
+# Standalone helper functions (compatible with hororf_benchmarks.py)
+# ============================================================================
 
 
-def load_neuroseed_dataset(
-    task: str = "edit_distance",
-    num_samples: int = 1000,
-    k_neighbors: int = 10,
-    seed: int = 42,
-    data_dir: str = "./data/neuroseed",
-    use_predefined_splits: bool = False,
-) -> Tuple[nx.Graph, np.ndarray, np.ndarray] | Tuple[nx.Graph, nx.Graph, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def get_training_data(class_label: int, seed: int, num_samples: int = 1250, convert_to_poincare: bool = True):
     """
-    Convenience function to load NeuroSEED dataset.
+    Get training data from NeuroSEED dataset.
 
     Parameters:
     -----------
-    task : str
-        Task name (e.g., "edit_distance")
-    num_samples : int
-        Number of samples to load (only used if use_predefined_splits=False)
-    k_neighbors : int
-        Number of neighbors for k-NN graph construction
+    class_label : int
+        Dimensionality of the hyperbolic space
     seed : int
         Random seed
-    data_dir : str
-        Directory containing NeuroSEED data
-    use_predefined_splits : bool
-        If True, loads both train and test splits separately and returns both.
-        If False, loads synthetic data for the whole dataset (for testing).
+    num_samples : int
+        Total number of samples (before train/test split)
+    convert_to_poincare : bool
+        If True, returns data in Poincaré ball coordinates
 
     Returns:
     --------
-    If use_predefined_splits=False (default):
-        graph : nx.Graph
-            NetworkX graph representation
-        labels : np.ndarray
-            Node labels
-        node_indices : np.ndarray
-            Node indices
-    
-    If use_predefined_splits=True:
-        train_graph : nx.Graph
-            Training graph
-        test_graph : nx.Graph
-            Testing graph
-        train_labels : np.ndarray
-            Training labels
-        test_labels : np.ndarray
-            Testing labels
-        train_indices : np.ndarray
-            Training node indices
-        test_indices : np.ndarray
-            Testing node indices
+    data : torch.Tensor
+        Training embeddings
+    labels : torch.Tensor
+        Training labels
     """
-    loader = NeuroSEEDLoader(data_dir=data_dir)
-    
-    if use_predefined_splits:
-        # Load train and test splits separately
-        print("\nLoading NeuroSEED with pre-defined train/test splits...")
-        
-        # Load training data
-        train_graph, train_labels, train_indices, train_metadata = loader.load_as_networkx(
-            split="train",
-            task=task,
-            num_samples=None,  # Load all available training data
-            k_neighbors=k_neighbors,
-            seed=seed
-        )
-        
-        # Load test data
-        test_graph, test_labels, test_indices, test_metadata = loader.load_as_networkx(
-            split="test",
-            task=task,
-            num_samples=None,  # Load all available test data
-            k_neighbors=k_neighbors,
-            seed=seed
-        )
-        
-        print(f"\nNeuroSEED Dataset Loaded (Pre-defined Splits):")
-        print(f"  Task: {train_metadata['dataset_name']}")
-        print(f"  Training samples: {train_metadata['num_samples']}")
-        print(f"  Test samples: {test_metadata['num_samples']}")
-        print(f"  Classes: {train_metadata['num_classes']}")
-        print(f"  Embedding dimension: {train_metadata['embedding_dim']}")
-        
-        return train_graph, test_graph, train_labels, test_labels, train_indices, test_indices
-    
-    else:
-        # Load single dataset (synthetic or specified split)
-        # This is for testing/development with synthetic data
-        graph, labels, node_indices, metadata = loader.load_as_networkx(
-            split="train",  # Default to train, but will use synthetic data anyway
-            task=task,
-            num_samples=num_samples,
-            k_neighbors=k_neighbors,
-            seed=seed
-        )
-        
-        print(f"\nNeuroSEED Dataset Loaded (Synthetic/Single Split):")
-        print(f"  Task: {metadata['dataset_name']}")
-        print(f"  Samples: {metadata['num_samples']}")
-        print(f"  Classes: {metadata['num_classes']}")
-        print(f"  Embedding dimension: {metadata['embedding_dim']}")
-        print(f"  Note: Use --use_predefined_splits to load real train/test splits")
+    loader = NeuroSEEDLoader()
+    return loader.get_training_data(class_label, seed, num_samples, convert_to_poincare)
 
-        return graph, labels, node_indices
 
+def get_testing_data(class_label: int, seed: int, num_samples: int = 1250, convert_to_poincare: bool = True):
+    """
+    Get testing data from NeuroSEED dataset.
+
+    Parameters:
+    -----------
+    class_label : int
+        Dimensionality of the hyperbolic space
+    seed : int
+        Random seed
+    num_samples : int
+        Total number of samples (before train/test split)
+    convert_to_poincare : bool
+        If True, returns data in Poincaré ball coordinates
+
+    Returns:
+    --------
+    data : torch.Tensor
+        Testing embeddings
+    labels : torch.Tensor
+        Testing labels
+    """
+    loader = NeuroSEEDLoader()
+    return loader.get_testing_data(class_label, seed, num_samples, convert_to_poincare)
+
+
+def get_space():
+    """Return the space type."""
+    return "hyperbolic"
