@@ -328,7 +328,7 @@ def load_gaussian_hyperbolic_dataset(
 
 def load_neuroseed_dataset(
     dimension: int = 2,
-    num_samples: int = 1250,
+    num_samples: int = None,
     k_neighbors: int = 10,
     seed: int = 42,
     data_file: str = "data/neuroseed/americangut.h5ad",
@@ -341,15 +341,12 @@ def load_neuroseed_dataset(
     Note: The pre-computed embeddings are used ONLY to construct the graph structure.
     New embeddings will be trained on this graph structure.
 
-    This function subsamples num_samples from the filtered dataset, matching the behavior
-    of run_neuroseed_benchmark.py.
-
     Parameters:
     -----------
     dimension : int
         Dimensionality of the hyperbolic embeddings (used for loading pre-computed embeddings)
-    num_samples : int
-        Number of samples to randomly subsample from filtered data (default: 1250)
+    num_samples : int or None
+        Number of samples to randomly subsample from filtered data (None = use all available data)
     k_neighbors : int
         Number of neighbors for k-NN graph construction
     seed : int
@@ -372,7 +369,7 @@ def load_neuroseed_dataset(
     """
     print("Loading NeuroSEED dataset...")
     print(f"  Dimension: {dimension}")
-    print(f"  Samples: {num_samples}")
+    print(f"  Samples: {num_samples or 'all available'}")
     print(f"  k-NN neighbors: {k_neighbors}")
     print(f"  Seed: {seed}")
     print(f"  Data file: {data_file}")
@@ -394,7 +391,7 @@ def load_neuroseed_dataset(
     embeddings = np.vstack([X_train, X_test])
     labels = np.hstack([y_train, y_test])
 
-    print(f"  Total samples loaded (after subsampling): {len(embeddings)}")
+    print(f"  Total samples loaded: {len(embeddings)}")
 
     # Convert embeddings to k-NN graph (using pre-computed embeddings only for graph structure)
     graph, labels, node_indices = loader.embeddings_to_graph(
@@ -415,7 +412,7 @@ def load_dataset(
     dataset_type: str,
     k_neighbors: int = 10,
     datasets_path: str = None,
-    num_samples: int = 1250,
+    num_samples: int = None,
     num_classes: int = 6,
     dimension: int = 2,
     seed: int = 42,
@@ -436,8 +433,8 @@ def load_dataset(
         Number of neighbors for PoincareMaps/Gaussian/NeuroSEED KNN graph construction
     datasets_path : str
         Path to PoincareMaps datasets directory
-    num_samples : int
-        Number of samples for Gaussian dataset / subsampled samples for NeuroSEED (default: 1250)
+    num_samples : int or None
+        Number of samples for Gaussian dataset / NeuroSEED (None = use all available for NeuroSEED)
     num_classes : int
         Number of classes for Gaussian dataset (only used when dataset_type="gaussian")
     dimension : int
@@ -472,7 +469,7 @@ def load_dataset(
         )
     elif dataset_type == "neuroseed":
         # NeuroSEED: use pre-computed embeddings only to construct graph, then train new embeddings
-        # Matches run_neuroseed_benchmark.py behavior (subsamples to num_samples)
+        # If num_samples is None, uses all available filtered data (80/20 train/test split)
         return load_neuroseed_dataset(
             dimension=dimension,
             num_samples=num_samples,
@@ -779,8 +776,8 @@ def main():
     parser.add_argument(
         "--gaussian_num_samples",
         type=int,
-        default=1250,
-        help="Number of samples for Gaussian dataset (only used when dataset=gaussian).",
+        default=None,
+        help="Number of samples for Gaussian/NeuroSEED dataset (None = use all available for NeuroSEED, defaults to 1250 for Gaussian).",
     )
     parser.add_argument(
         "--gaussian_num_classes",
@@ -831,12 +828,17 @@ def main():
         # Use args.gaussian_num_samples for both Gaussian and NeuroSEED num_samples
         dimension_to_use = args.dim if args.dataset == "neuroseed" else args.gaussian_dimension
 
+        # Set default num_samples for Gaussian dataset if None
+        num_samples_to_use = args.gaussian_num_samples
+        if num_samples_to_use is None and args.dataset == "gaussian":
+            num_samples_to_use = 1250  # Default for Gaussian
+
         graph, labels, node_indices = load_dataset(
             dataset_name=args.dataset,
             dataset_type=args.dataset,
             k_neighbors=args.k_neighbors,
             datasets_path=args.datasets_path,
-            num_samples=args.gaussian_num_samples,  # Used for both Gaussian and NeuroSEED
+            num_samples=num_samples_to_use,  # Used for both Gaussian and NeuroSEED
             num_classes=args.gaussian_num_classes,
             dimension=dimension_to_use,
             seed=args.gaussian_seed,

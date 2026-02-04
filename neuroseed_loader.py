@@ -57,7 +57,7 @@ class NeuroSEEDLoader:
         self,
         seed: int,
         dimension: int,
-        num_samples: int = 1250,
+        num_samples: int = None,
         convert_to_poincare: bool = True,
         min_label_count: int = 1000,
         taxonomy_level: str = "taxonomy_1",
@@ -71,8 +71,8 @@ class NeuroSEEDLoader:
             Random seed for reproducibility
         dimension : int
             Dimensionality of the hyperbolic embeddings
-        num_samples : int
-            Number of samples to draw
+        num_samples : int or None
+            Number of samples to draw (None = use all available samples)
         convert_to_poincare : bool
             If True, use Poincaré ball coordinates; if False, use hyperboloid
         min_label_count : int
@@ -106,7 +106,14 @@ class NeuroSEEDLoader:
         np.random.seed(seed)
 
         # Draw indices from filtered labels
-        indices = np.random.choice(labels_filtered.index, num_samples, replace=False)
+        if num_samples is None:
+            # Use all available samples
+            indices = labels_filtered.index.to_numpy()
+            # Shuffle the indices to maintain randomness
+            np.random.shuffle(indices)
+        else:
+            # Draw a subset
+            indices = np.random.choice(labels_filtered.index, num_samples, replace=False)
 
         # Get embeddings
         if convert_to_poincare:
@@ -132,7 +139,7 @@ class NeuroSEEDLoader:
         return X_train, X_test, y_train, y_test
 
     def get_training_data(
-        self, class_label: int, seed: int, num_samples: int = 1250, convert_to_poincare: bool = True
+        self, class_label: int, seed: int, num_samples: int = None, convert_to_poincare: bool = True
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Get training data from NeuroSEED dataset.
@@ -143,8 +150,8 @@ class NeuroSEEDLoader:
             Dimensionality of the hyperbolic space (serves as the "class label")
         seed : int
             Random seed
-        num_samples : int
-            Total number of samples (before train/test split)
+        num_samples : int or None
+            Total number of samples (None = all available, or specify a number for subset)
         convert_to_poincare : bool
             If True, returns data in Poincaré ball coordinates
             If False, returns data in hyperboloid coordinates
@@ -162,7 +169,7 @@ class NeuroSEEDLoader:
         return torch.as_tensor(X_train), torch.as_tensor(y_train, dtype=int).flatten()
 
     def get_testing_data(
-        self, class_label: int, seed: int, num_samples: int = 1250, convert_to_poincare: bool = True
+        self, class_label: int, seed: int, num_samples: int = None, convert_to_poincare: bool = True
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Get testing data from NeuroSEED dataset.
@@ -173,8 +180,8 @@ class NeuroSEEDLoader:
             Dimensionality of the hyperbolic space (serves as the "class label")
         seed : int
             Random seed
-        num_samples : int
-            Total number of samples (before train/test split)
+        num_samples : int or None
+            Total number of samples (None = all available, or specify a number for subset)
         convert_to_poincare : bool
             If True, returns data in Poincaré ball coordinates
             If False, returns data in hyperboloid coordinates
@@ -277,7 +284,7 @@ class NeuroSEEDLoader:
 # ============================================================================
 
 
-def get_training_data(class_label: int, seed: int, num_samples: int = 1250, convert_to_poincare: bool = True):
+def get_training_data(class_label: int, seed: int, num_samples: int = None, convert_to_poincare: bool = True):
     """
     Get training data from NeuroSEED dataset.
 
@@ -287,8 +294,8 @@ def get_training_data(class_label: int, seed: int, num_samples: int = 1250, conv
         Dimensionality of the hyperbolic space
     seed : int
         Random seed
-    num_samples : int
-        Total number of samples (before train/test split)
+    num_samples : int or None
+        Total number of samples (None = all available, or specify a number for subset)
     convert_to_poincare : bool
         If True, returns data in Poincaré ball coordinates
 
@@ -303,7 +310,7 @@ def get_training_data(class_label: int, seed: int, num_samples: int = 1250, conv
     return loader.get_training_data(class_label, seed, num_samples, convert_to_poincare)
 
 
-def get_testing_data(class_label: int, seed: int, num_samples: int = 1250, convert_to_poincare: bool = True):
+def get_testing_data(class_label: int, seed: int, num_samples: int = None, convert_to_poincare: bool = True):
     """
     Get testing data from NeuroSEED dataset.
 
@@ -313,8 +320,8 @@ def get_testing_data(class_label: int, seed: int, num_samples: int = 1250, conve
         Dimensionality of the hyperbolic space
     seed : int
         Random seed
-    num_samples : int
-        Total number of samples (before train/test split)
+    num_samples : int or None
+        Total number of samples (None = all available, or specify a number for subset)
     convert_to_poincare : bool
         If True, returns data in Poincaré ball coordinates
 

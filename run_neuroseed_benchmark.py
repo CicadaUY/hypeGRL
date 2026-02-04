@@ -25,7 +25,7 @@ from neuroseed_loader import get_space, get_testing_data, get_training_data
 # Dataset parameters
 dims = [2, 4, 8, 16]  # Dimensionality of hyperbolic space
 seeds = [0, 1, 2, 3, 4]  # Random seeds for multiple runs
-n_samples_total = 1250  # Total number of samples (including train/test split)
+n_samples_total = None  # Total number of samples (None = use all available data, or set a number for subset)
 
 # Tree/Forest hyperparameters
 max_depth = 3
@@ -49,16 +49,16 @@ def evaluate_neuroseed_hdt(dimension, seed, num_samples, params):
     seed : int
         Random seed
     num_samples : int
-        Total number of samples
+        Total number of samples (None = use all available data)
     params : dict
         Hyperparameters for the classifiers
 
     Returns:
     --------
-    f1_scores_tree : list
-        F1 scores for Hyperbolic Decision Tree across folds
-    f1_scores_forest : list
-        F1 scores for Hyperbolic Random Forest across folds
+    f1_score_tree : float
+        F1 score for Hyperbolic Decision Tree
+    f1_score_forest : float
+        F1 score for Hyperbolic Random Forest
     tree_time : float
         Time taken for tree evaluation
     forest_time : float
@@ -68,21 +68,33 @@ def evaluate_neuroseed_hdt(dimension, seed, num_samples, params):
     """
     # Dataset
     t0 = time()
-    print(f"\nLoading NeuroSEED dataset (dim={dimension}, seed={seed}, n={num_samples})...")
+    print(f"\nLoading NeuroSEED dataset (dim={dimension}, seed={seed}, n={num_samples or 'all'})...")
 
-    # Get data
+    # Get train and test data
     X_train, y_train = get_training_data(
         class_label=dimension,
         seed=seed,
         num_samples=num_samples,
         convert_to_poincare=False,  # Use hyperboloid coordinates
     )
+    X_test, y_test = get_testing_data(
+        class_label=dimension,
+        seed=seed,
+        num_samples=num_samples,
+        convert_to_poincare=False,  # Use hyperboloid coordinates
+    )
+
     X_train = X_train.numpy()
     y_train = y_train.numpy()
+    X_test = X_test.numpy()
+    y_test = y_test.numpy()
 
-    print(f"X shape: {X_train.shape}")
-    print(f"y shape: {y_train.shape}")
-    print(f"Class distribution: {np.bincount(y_train)}")
+    print(f"Train X shape: {X_train.shape}")
+    print(f"Train y shape: {y_train.shape}")
+    print(f"Test X shape: {X_test.shape}")
+    print(f"Test y shape: {y_test.shape}")
+    print(f"Train class distribution: {np.bincount(y_train)}")
+    print(f"Test class distribution: {np.bincount(y_test)}")
     print(f"Number of classes: {len(np.unique(y_train))}")
 
     # Hyperparameters
@@ -98,53 +110,41 @@ def evaluate_neuroseed_hdt(dimension, seed, num_samples, params):
         "random_state": seed,
     }
 
-    # 5-fold cross-validation
-    kf = KFold(n_splits=5, shuffle=True, random_state=seed)
-    iterator = list(kf.split(X_train))
-
     t1 = time()
 
     # ========================================
     # Hyperbolic Decision Tree
     # ========================================
-    f1_scores_tree = []
     print("\nEvaluating Hyperbolic Decision Tree...")
-    for fold_idx, (train_index, test_index) in enumerate(iterator):
-        print(f"  Fold {fold_idx + 1}/5...", end=" ")
-        try:
-            tree = HyperbolicDecisionTreeClassifier(**tree_args)
-            tree.fit(X_train[train_index], y_train[train_index])
-            y_pred = tree.predict(X_train[test_index])
-            f1 = f1_score(y_train[test_index], y_pred, average="micro")
-            f1_scores_tree.append(f1)
-            print(f"F1: {f1:.4f}")
-        except Exception as e:
-            print(f"Error: {e}")
-            f1_scores_tree.append(np.nan)
+    try:
+        tree = HyperbolicDecisionTreeClassifier(**tree_args)
+        tree.fit(X_train, y_train)
+        y_pred = tree.predict(X_test)
+        f1_tree = f1_score(y_test, y_pred, average="micro")
+        print(f"  F1: {f1_tree:.4f}")
+    except Exception as e:
+        print(f"Error: {e}")
+        f1_tree = np.nan
 
     t2 = time()
 
     # ========================================
     # Hyperbolic Random Forest
     # ========================================
-    f1_scores_forest = []
     print("\nEvaluating Hyperbolic Random Forest...")
-    for fold_idx, (train_index, test_index) in enumerate(iterator):
-        print(f"  Fold {fold_idx + 1}/5...", end=" ")
-        try:
-            forest = HyperbolicRandomForestClassifier(**forest_args)
-            forest.fit(X_train[train_index], y_train[train_index])
-            y_pred = forest.predict(X_train[test_index])
-            f1 = f1_score(y_train[test_index], y_pred, average="micro")
-            f1_scores_forest.append(f1)
-            print(f"F1: {f1:.4f}")
-        except Exception as e:
-            print(f"Error: {e}")
-            f1_scores_forest.append(np.nan)
+    try:
+        forest = HyperbolicRandomForestClassifier(**forest_args)
+        forest.fit(X_train, y_train)
+        y_pred = forest.predict(X_test)
+        f1_forest = f1_score(y_test, y_pred, average="micro")
+        print(f"  F1: {f1_forest:.4f}")
+    except Exception as e:
+        print(f"Error: {e}")
+        f1_forest = np.nan
 
     t3 = time()
 
-    return f1_scores_tree, f1_scores_forest, t2 - t1, t3 - t2, t1 - t0
+    return f1_tree, f1_forest, t2 - t1, t3 - t2, t1 - t0
 
 
 # ============================================================================
@@ -170,7 +170,8 @@ def run_benchmark(output_dir="test/other/results/neuroseed"):
     print(f"  Classifiers: Hyperbolic Decision Tree & Hyperbolic Random Forest")
     print(f"  Dimensions: {dims}")
     print(f"  Seeds: {seeds}")
-    print(f"  Total samples: {n_samples_total} (80% train / 20% test)")
+    print(f"  Total samples: {n_samples_total or 'all available'} (80% train / 20% test)")
+    print(f"  Evaluation: Single train/test split (no cross-validation)")
     print(f"  Max depth: {max_depth}")
     print(f"  Number of estimators (forest): {num_classifiers}")
     print(f"  Min samples leaf: {min_samples_leaf}")
@@ -199,7 +200,7 @@ def run_benchmark(output_dir="test/other/results/neuroseed"):
 
             # Run evaluation
             try:
-                f1_scores_tree, f1_scores_forest, tree_time, forest_time, init_time = evaluate_neuroseed_hdt(
+                f1_tree, f1_forest, tree_time, forest_time, init_time = evaluate_neuroseed_hdt(
                     dimension=dim,
                     seed=seed,
                     num_samples=n_samples_total,
@@ -207,31 +208,29 @@ def run_benchmark(output_dir="test/other/results/neuroseed"):
                 )
 
                 # Save results to dataframe - Decision Tree
-                for fold, score in enumerate(f1_scores_tree):
-                    results.loc[len(results)] = [
-                        int(n_samples_total * 0.8),  # Training samples
-                        "neuroseed",
-                        dim,
-                        seed,
-                        "tree",
-                        fold,
-                        score,
-                    ]
+                results.loc[len(results)] = [
+                    int(n_samples_total * 0.8) if n_samples_total else "all",  # Training samples
+                    "neuroseed",
+                    dim,
+                    seed,
+                    "tree",
+                    0,  # Single evaluation, no fold
+                    f1_tree,
+                ]
 
                 # Save results to dataframe - Random Forest
-                for fold, score in enumerate(f1_scores_forest):
-                    results.loc[len(results)] = [
-                        int(n_samples_total * 0.8),  # Training samples
-                        "neuroseed",
-                        dim,
-                        seed,
-                        "forest",
-                        fold,
-                        score,
-                    ]
+                results.loc[len(results)] = [
+                    int(n_samples_total * 0.8) if n_samples_total else "all",  # Training samples
+                    "neuroseed",
+                    dim,
+                    seed,
+                    "forest",
+                    0,  # Single evaluation, no fold
+                    f1_forest,
+                ]
 
                 times.loc[len(times)] = [
-                    int(n_samples_total * 0.8),
+                    int(n_samples_total * 0.8) if n_samples_total else "all",
                     "neuroseed",
                     dim,
                     seed,
@@ -241,7 +240,7 @@ def run_benchmark(output_dir="test/other/results/neuroseed"):
                 ]
 
                 times.loc[len(times)] = [
-                    int(n_samples_total * 0.8),
+                    int(n_samples_total * 0.8) if n_samples_total else "all",
                     "neuroseed",
                     dim,
                     seed,
@@ -321,9 +320,9 @@ def run_benchmark(output_dir="test/other/results/neuroseed"):
         f.write(f"Dimensions Tested: {dims}\n")
         f.write(f"Random Seeds: {seeds}\n")
         f.write(f"Number of Iterations: {len(seeds)}\n")
-        f.write(f"Training Samples per Run: {int(n_samples_total * 0.8)}\n")
-        f.write(f"Total Samples (before split): {n_samples_total}\n")
-        f.write(f"Cross-validation Folds: 5\n")
+        f.write(f"Training Samples per Run: {int(n_samples_total * 0.8) if n_samples_total else 'all (80%)'}\n")
+        f.write(f"Total Samples (before split): {n_samples_total or 'all available'}\n")
+        f.write(f"Evaluation Method: Single 80/20 train/test split (no cross-validation)\n")
         f.write(f"Total Runs: {total_runs}\n")
         f.write("\n")
 
@@ -374,8 +373,8 @@ def run_benchmark(output_dir="test/other/results/neuroseed"):
                 for seed in seeds:
                     seed_data = tree_data[tree_data["seed"] == seed]
                     if len(seed_data) > 0:
-                        f1_scores = seed_data["f1_micro"].values
-                        f.write(f"  Seed {seed}: {f1_scores.tolist()}\n")
+                        f1_score = seed_data["f1_micro"].values[0]
+                        f.write(f"  Seed {seed}: {f1_score:.4f}\n")
                 f.write(f"  Mean ± Std: {tree_data['f1_micro'].mean():.4f} ± {tree_data['f1_micro'].std():.4f}\n\n")
 
                 # Random Forest results
@@ -384,8 +383,8 @@ def run_benchmark(output_dir="test/other/results/neuroseed"):
                 for seed in seeds:
                     seed_data = forest_data[forest_data["seed"] == seed]
                     if len(seed_data) > 0:
-                        f1_scores = seed_data["f1_micro"].values
-                        f.write(f"  Seed {seed}: {f1_scores.tolist()}\n")
+                        f1_score = seed_data["f1_micro"].values[0]
+                        f.write(f"  Seed {seed}: {f1_score:.4f}\n")
                 f.write(f"  Mean ± Std: {forest_data['f1_micro'].mean():.4f} ± {forest_data['f1_micro'].std():.4f}\n")
 
     print(f"\n✓ Results saved to: {output_file}")
@@ -415,8 +414,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num_samples",
         type=int,
-        default=1250,
-        help="Total number of samples to use (before train/test split)",
+        default=None,
+        help="Total number of samples to use (None = all available, or specify a number for subset)",
     )
 
     args = parser.parse_args()
