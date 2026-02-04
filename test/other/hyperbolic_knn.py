@@ -22,6 +22,7 @@ from sklearn.preprocessing import LabelEncoder
 
 from gaussian_loader import load_gaussian_dataset
 from hyperbolic_embeddings import HyperbolicEmbeddings
+from neuroseed_loader import NeuroSEEDLoader
 from poincare_maps_networkx_loader import PoincareMapsLoader
 from utils.geometric_conversions import HyperbolicConversions
 
@@ -325,15 +326,102 @@ def load_gaussian_hyperbolic_dataset(
     return graph, labels, node_indices
 
 
+def load_neuroseed_dataset(
+    dimension: int = 2,
+    num_samples: int = 1250,
+    k_neighbors: int = 10,
+    seed: int = 42,
+    data_file: str = "data/neuroseed/americangut.h5ad",
+    min_label_count: int = 1000,
+    taxonomy_level: str = "taxonomy_1",
+) -> Tuple[nx.Graph, np.ndarray, np.ndarray]:
+    """
+    Load NeuroSEED dataset and construct a k-NN graph from pre-computed embeddings.
+
+    Note: The pre-computed embeddings are used ONLY to construct the graph structure.
+    New embeddings will be trained on this graph structure.
+
+    This function subsamples num_samples from the filtered dataset, matching the behavior
+    of run_neuroseed_benchmark.py.
+
+    Parameters:
+    -----------
+    dimension : int
+        Dimensionality of the hyperbolic embeddings (used for loading pre-computed embeddings)
+    num_samples : int
+        Number of samples to randomly subsample from filtered data (default: 1250)
+    k_neighbors : int
+        Number of neighbors for k-NN graph construction
+    seed : int
+        Random seed for reproducibility
+    data_file : str
+        Path to the h5ad file containing the NeuroSEED dataset
+    min_label_count : int
+        Minimum number of samples per label to keep
+    taxonomy_level : str
+        Taxonomy level to use for labels
+
+    Returns:
+    --------
+    graph : nx.Graph
+        NetworkX graph representation (k-NN graph constructed from pre-computed embeddings)
+    labels : np.ndarray
+        Node labels (numeric)
+    node_indices : np.ndarray
+        Array of node indices
+    """
+    print("Loading NeuroSEED dataset...")
+    print(f"  Dimension: {dimension}")
+    print(f"  Samples: {num_samples}")
+    print(f"  k-NN neighbors: {k_neighbors}")
+    print(f"  Seed: {seed}")
+    print(f"  Data file: {data_file}")
+
+    # Initialize loader
+    loader = NeuroSEEDLoader(data_file=data_file)
+
+    # Get all data (not split yet - we'll split it later in the main function)
+    X_train, X_test, y_train, y_test = loader.get_data(
+        seed=seed,
+        dimension=dimension,
+        num_samples=num_samples,
+        convert_to_poincare=True,
+        min_label_count=min_label_count,
+        taxonomy_level=taxonomy_level,
+    )
+
+    # Combine train and test data back together (we'll split it later in main)
+    embeddings = np.vstack([X_train, X_test])
+    labels = np.hstack([y_train, y_test])
+
+    print(f"  Total samples loaded (after subsampling): {len(embeddings)}")
+
+    # Convert embeddings to k-NN graph (using pre-computed embeddings only for graph structure)
+    graph, labels, node_indices = loader.embeddings_to_graph(
+        embeddings=embeddings,
+        labels=labels,
+        k_neighbors=k_neighbors,
+        distance_metric="poincare",
+    )
+
+    print("Note: Graph structure created from pre-computed embeddings.")
+    print("      New embeddings will be trained on this graph structure.")
+
+    return graph, labels, node_indices
+
+
 def load_dataset(
     dataset_name: str,
     dataset_type: str,
-    k_neighbors: int = 15,
+    k_neighbors: int = 10,
     datasets_path: str = None,
     num_samples: int = 1250,
-    num_classes: int = 2,
+    num_classes: int = 6,
     dimension: int = 2,
     seed: int = 42,
+    neuroseed_data_file: str = "data/neuroseed/americangut.h5ad",
+    neuroseed_min_label_count: int = 1000,
+    neuroseed_taxonomy_level: str = "taxonomy_1",
 ) -> Tuple[nx.Graph, np.ndarray, np.ndarray]:
     """
     Load dataset based on type and return graph, labels, and node indices.
@@ -343,19 +431,19 @@ def load_dataset(
     dataset_name : str
         Name of the dataset
     dataset_type : str
-        Type of dataset ("AS", "ogbn-arxiv", "gaussian", or PoincareMaps dataset name)
+        Type of dataset ("AS", "ogbn-arxiv", "gaussian", "neuroseed", or PoincareMaps dataset name)
     k_neighbors : int
-        Number of neighbors for PoincareMaps/Gaussian KNN graph construction
+        Number of neighbors for PoincareMaps/Gaussian/NeuroSEED KNN graph construction
     datasets_path : str
         Path to PoincareMaps datasets directory
     num_samples : int
-        Number of samples for Gaussian dataset (only used when dataset_type="gaussian")
+        Number of samples for Gaussian dataset / subsampled samples for NeuroSEED (default: 1250)
     num_classes : int
         Number of classes for Gaussian dataset (only used when dataset_type="gaussian")
     dimension : int
-        Dimension for Gaussian dataset (only used when dataset_type="gaussian")
+        Dimension for Gaussian/NeuroSEED dataset
     seed : int
-        Random seed for Gaussian dataset (only used when dataset_type="gaussian")
+        Random seed for Gaussian/NeuroSEED dataset
 
     Returns:
     --------
@@ -381,6 +469,18 @@ def load_dataset(
             dimension=dimension,
             k_neighbors=k_neighbors,
             seed=seed,
+        )
+    elif dataset_type == "neuroseed":
+        # NeuroSEED: use pre-computed embeddings only to construct graph, then train new embeddings
+        # Matches run_neuroseed_benchmark.py behavior (subsamples to num_samples)
+        return load_neuroseed_dataset(
+            dimension=dimension,
+            num_samples=num_samples,
+            k_neighbors=k_neighbors,
+            seed=seed,
+            data_file=neuroseed_data_file,
+            min_label_count=neuroseed_min_label_count,
+            taxonomy_level=neuroseed_taxonomy_level,
         )
     else:
         # PoincareMaps dataset
@@ -610,6 +710,7 @@ def main():
             "polblogs",
             "Cora",
             "gaussian",
+            "neuroseed",
         ],
         help="Dataset to use",
     )
@@ -654,7 +755,7 @@ def main():
     parser.add_argument(
         "--k_neighbors",
         type=int,
-        default=15,
+        default=20,
         help="Number of neighbors for PoincareMaps KNN graph construction (ignored for OGB datasets).",
     )
     parser.add_argument(
@@ -684,7 +785,7 @@ def main():
     parser.add_argument(
         "--gaussian_num_classes",
         type=int,
-        default=2,
+        default=6,
         help="Number of classes for Gaussian dataset (only used when dataset=gaussian).",
     )
     parser.add_argument(
@@ -699,6 +800,24 @@ def main():
         default=42,
         help="Random seed for Gaussian dataset generation (only used when dataset=gaussian).",
     )
+    parser.add_argument(
+        "--neuroseed_data_file",
+        type=str,
+        default="data/neuroseed/americangut.h5ad",
+        help="Path to the NeuroSEED h5ad data file (only used when dataset=neuroseed).",
+    )
+    parser.add_argument(
+        "--neuroseed_min_label_count",
+        type=int,
+        default=1000,
+        help="Minimum number of samples per label to keep (only used when dataset=neuroseed).",
+    )
+    parser.add_argument(
+        "--neuroseed_taxonomy_level",
+        type=str,
+        default="taxonomy_1",
+        help="Taxonomy level to use for labels (only used when dataset=neuroseed).",
+    )
 
     args = parser.parse_args()
 
@@ -708,15 +827,22 @@ def main():
 
     # Load dataset
     try:
+        # Use args.dim for NeuroSEED dimension
+        # Use args.gaussian_num_samples for both Gaussian and NeuroSEED num_samples
+        dimension_to_use = args.dim if args.dataset == "neuroseed" else args.gaussian_dimension
+
         graph, labels, node_indices = load_dataset(
             dataset_name=args.dataset,
             dataset_type=args.dataset,
             k_neighbors=args.k_neighbors,
             datasets_path=args.datasets_path,
-            num_samples=args.gaussian_num_samples,
+            num_samples=args.gaussian_num_samples,  # Used for both Gaussian and NeuroSEED
             num_classes=args.gaussian_num_classes,
-            dimension=args.gaussian_dimension,
+            dimension=dimension_to_use,
             seed=args.gaussian_seed,
+            neuroseed_data_file=args.neuroseed_data_file,
+            neuroseed_min_label_count=args.neuroseed_min_label_count,
+            neuroseed_taxonomy_level=args.neuroseed_taxonomy_level,
         )
     except ValueError as e:
         print(f"Error: {e}")
