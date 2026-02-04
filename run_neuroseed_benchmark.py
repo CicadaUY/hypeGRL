@@ -390,14 +390,6 @@ def run_benchmark(output_dir="test/other/results/neuroseed"):
 
     print(f"\n✓ Results saved to: {output_file}")
 
-    # Also save raw dataframes
-    results_csv = os.path.join(output_dir, "neuroseed_results.csv")
-    times_csv = os.path.join(output_dir, "neuroseed_times.csv")
-    results.to_csv(results_csv, index=False)
-    times.to_csv(times_csv, index=False)
-    print(f"✓ Raw results saved to: {results_csv}")
-    print(f"✓ Timing data saved to: {times_csv}")
-
 
 # ============================================================================
 # Entry Point
