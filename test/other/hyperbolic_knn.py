@@ -20,6 +20,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import LabelEncoder
 
+from gaussian_loader import load_gaussian_dataset
 from hyperbolic_embeddings import HyperbolicEmbeddings
 from poincare_maps_networkx_loader import PoincareMapsLoader
 from utils.geometric_conversions import HyperbolicConversions
@@ -265,11 +266,74 @@ def load_cora_dataset() -> Tuple[nx.Graph, np.ndarray, np.ndarray]:
     return graph, labels, node_indices
 
 
+def load_gaussian_hyperbolic_dataset(
+    num_samples: int = 1250,
+    num_classes: int = 2,
+    dimension: int = 2,
+    k_neighbors: int = 10,
+    seed: int = 42,
+    noise_std: float = 2.0,
+    separation: float = 2.0,
+) -> Tuple[nx.Graph, np.ndarray, np.ndarray]:
+    """
+    Load Gaussian hyperbolic dataset with synthetic embeddings.
+
+    Parameters:
+    -----------
+    num_samples : int
+        Total number of samples to generate
+    num_classes : int
+        Number of classes/clusters
+    dimension : int
+        Dimensionality of the hyperbolic space
+    k_neighbors : int
+        Number of neighbors for k-NN graph construction
+    seed : int
+        Random seed
+    noise_std : float
+        Standard deviation of cluster noise
+    separation : float
+        Separation between cluster centers
+
+    Returns:
+    --------
+    graph : nx.Graph
+        NetworkX graph representation (k-NN graph)
+    labels : np.ndarray
+        Node labels (numeric)
+    node_indices : np.ndarray
+        Array of node indices
+    """
+    print("Loading Gaussian hyperbolic dataset...")
+    print(f"  Samples: {num_samples}")
+    print(f"  Classes: {num_classes}")
+    print(f"  Dimension: {dimension}")
+    print(f"  k-NN neighbors: {k_neighbors}")
+    print(f"  Seed: {seed}")
+
+    # Load the Gaussian dataset using the gaussian_loader
+    graph, labels, node_indices = load_gaussian_dataset(
+        dimension=dimension,
+        num_samples=num_samples,
+        num_classes=num_classes,
+        k_neighbors=k_neighbors,
+        seed=seed,
+        noise_std=noise_std,
+        separation=separation,
+    )
+
+    return graph, labels, node_indices
+
+
 def load_dataset(
     dataset_name: str,
     dataset_type: str,
     k_neighbors: int = 15,
     datasets_path: str = None,
+    num_samples: int = 1250,
+    num_classes: int = 2,
+    dimension: int = 2,
+    seed: int = 42,
 ) -> Tuple[nx.Graph, np.ndarray, np.ndarray]:
     """
     Load dataset based on type and return graph, labels, and node indices.
@@ -279,11 +343,19 @@ def load_dataset(
     dataset_name : str
         Name of the dataset
     dataset_type : str
-        Type of dataset ("AS", "ogbn-arxiv", or PoincareMaps dataset name)
+        Type of dataset ("AS", "ogbn-arxiv", "gaussian", or PoincareMaps dataset name)
     k_neighbors : int
-        Number of neighbors for PoincareMaps KNN graph construction
+        Number of neighbors for PoincareMaps/Gaussian KNN graph construction
     datasets_path : str
         Path to PoincareMaps datasets directory
+    num_samples : int
+        Number of samples for Gaussian dataset (only used when dataset_type="gaussian")
+    num_classes : int
+        Number of classes for Gaussian dataset (only used when dataset_type="gaussian")
+    dimension : int
+        Dimension for Gaussian dataset (only used when dataset_type="gaussian")
+    seed : int
+        Random seed for Gaussian dataset (only used when dataset_type="gaussian")
 
     Returns:
     --------
@@ -302,6 +374,14 @@ def load_dataset(
         return load_polblogs_dataset()
     elif dataset_type == "Cora":
         return load_cora_dataset()
+    elif dataset_type == "gaussian":
+        return load_gaussian_hyperbolic_dataset(
+            num_samples=num_samples,
+            num_classes=num_classes,
+            dimension=dimension,
+            k_neighbors=k_neighbors,
+            seed=seed,
+        )
     else:
         # PoincareMaps dataset
         if datasets_path is None:
@@ -529,6 +609,7 @@ def main():
             "ogbn-arxiv",
             "polblogs",
             "Cora",
+            "gaussian",
         ],
         help="Dataset to use",
     )
@@ -594,6 +675,30 @@ def main():
         default=None,
         help="Path to save results (default: test/other/results/{dataset}/{embedding_type}_knn_results.txt).",
     )
+    parser.add_argument(
+        "--gaussian_num_samples",
+        type=int,
+        default=1250,
+        help="Number of samples for Gaussian dataset (only used when dataset=gaussian).",
+    )
+    parser.add_argument(
+        "--gaussian_num_classes",
+        type=int,
+        default=2,
+        help="Number of classes for Gaussian dataset (only used when dataset=gaussian).",
+    )
+    parser.add_argument(
+        "--gaussian_dimension",
+        type=int,
+        default=2,
+        help="Dimension for Gaussian dataset (only used when dataset=gaussian).",
+    )
+    parser.add_argument(
+        "--gaussian_seed",
+        type=int,
+        default=42,
+        help="Random seed for Gaussian dataset generation (only used when dataset=gaussian).",
+    )
 
     args = parser.parse_args()
 
@@ -608,6 +713,10 @@ def main():
             dataset_type=args.dataset,
             k_neighbors=args.k_neighbors,
             datasets_path=args.datasets_path,
+            num_samples=args.gaussian_num_samples,
+            num_classes=args.gaussian_num_classes,
+            dimension=args.gaussian_dimension,
+            seed=args.gaussian_seed,
         )
     except ValueError as e:
         print(f"Error: {e}")

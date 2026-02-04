@@ -11,10 +11,8 @@ from time import time
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import f1_score
 from sklearn.model_selection import KFold, train_test_split
-from sklearn.tree import DecisionTreeClassifier
 
 from gaussian_loader import GaussianLoader
 from hyperdt.ensemble import HyperbolicRandomForestClassifier
@@ -118,17 +116,14 @@ def get_space():
 # Benchmark Configuration
 # ============================================================================
 
-# Classifiers to benchmark
-clf_names = ["hrf", "rf"]  # "hrf" = Hyperbolic RF, "rf" = Euclidean RF
-
 # Dataset parameters
 dims = [2, 4, 8, 16]  # Dimensionality of hyperbolic space
 seeds = [0, 1, 2, 3, 4]  # Random seeds for multiple runs
 n_samples_train = [1000]  # Number of training samples
 
-# Tree hyperparameters
+# Tree/Forest hyperparameters
 max_depth = 3
-num_classifiers = 10  # Number of trees in the forest (use 1 for single decision tree)
+num_classifiers = 10  # Number of trees in the Random Forest
 min_samples_leaf = 1
 
 # Adjust for train_test split
@@ -142,7 +137,7 @@ n_samples = [int(x / 0.8) for x in n_samples_train]
 
 def evaluate_gaussian_hdt(dimension, seed, num_samples, params):
     """
-    Evaluate hyperbolic decision trees on Gaussian dataset.
+    Evaluate hyperbolic decision trees/forests on Gaussian dataset.
 
     Parameters:
     -----------
@@ -157,14 +152,14 @@ def evaluate_gaussian_hdt(dimension, seed, num_samples, params):
 
     Returns:
     --------
-    f1_scores_hrf : list
-        F1 scores for Hyperbolic RF across folds
-    f1_scores_rf : list
-        F1 scores for Euclidean RF across folds
-    hrf_time : float
-        Time taken for HRF evaluation
-    rf_time : float
-        Time taken for RF evaluation
+    f1_scores_tree : list
+        F1 scores for Hyperbolic Decision Tree across folds
+    f1_scores_forest : list
+        F1 scores for Hyperbolic Random Forest across folds
+    tree_time : float
+        Time taken for tree evaluation
+    forest_time : float
+        Time taken for forest evaluation
     init_time : float
         Time taken for data loading
     """
@@ -187,17 +182,17 @@ def evaluate_gaussian_hdt(dimension, seed, num_samples, params):
     print(f"Class distribution: {np.bincount(y_train)}")
 
     # Hyperparameters
-    args = {
+    tree_args = {
+        "max_depth": params["max_depth"],
+        "min_samples_leaf": params["min_samples_leaf"],
+    }
+
+    forest_args = {
         "n_estimators": params["num_trees"],
         "max_depth": params["max_depth"],
         "min_samples_leaf": params["min_samples_leaf"],
         "random_state": seed,
     }
-    use_tree = False
-    if args["n_estimators"] == 1:
-        del args["n_estimators"]  # This is a decision tree now
-        del args["random_state"]
-        use_tree = True
 
     # 5-fold cross-validation
     kf = KFold(n_splits=5, shuffle=True, random_state=seed)
@@ -206,56 +201,46 @@ def evaluate_gaussian_hdt(dimension, seed, num_samples, params):
     t1 = time()
 
     # ========================================
-    # Hyperbolic RF/Tree
+    # Hyperbolic Decision Tree
     # ========================================
-    f1_scores_hrf = []
-    if "hrf" in clf_names:
-        print("\nEvaluating Hyperbolic RF/Tree...")
-        for fold_idx, (train_index, test_index) in enumerate(iterator):
-            print(f"  Fold {fold_idx + 1}/5...", end=" ")
-            try:
-                if use_tree:
-                    hrf = HyperbolicDecisionTreeClassifier(**args)
-                    hrf.fit(X_train[train_index], y_train[train_index])
-                else:
-                    hrf = HyperbolicRandomForestClassifier(**args)
-                    hrf.fit(X_train[train_index], y_train[train_index])
-
-                y_pred = hrf.predict(X_train[test_index])
-                f1 = f1_score(y_train[test_index], y_pred, average="micro")
-                f1_scores_hrf.append(f1)
-                print(f"F1: {f1:.4f}")
-            except Exception as e:
-                print(f"Error: {e}")
-                f1_scores_hrf.append(np.nan)
+    f1_scores_tree = []
+    print("\nEvaluating Hyperbolic Decision Tree...")
+    for fold_idx, (train_index, test_index) in enumerate(iterator):
+        print(f"  Fold {fold_idx + 1}/5...", end=" ")
+        try:
+            tree = HyperbolicDecisionTreeClassifier(**tree_args)
+            tree.fit(X_train[train_index], y_train[train_index])
+            y_pred = tree.predict(X_train[test_index])
+            f1 = f1_score(y_train[test_index], y_pred, average="micro")
+            f1_scores_tree.append(f1)
+            print(f"F1: {f1:.4f}")
+        except Exception as e:
+            print(f"Error: {e}")
+            f1_scores_tree.append(np.nan)
 
     t2 = time()
 
     # ========================================
-    # Euclidean RF/Tree
+    # Hyperbolic Random Forest
     # ========================================
-    f1_scores_rf = []
-    if "rf" in clf_names:
-        print("\nEvaluating Euclidean RF/Tree...")
-        for fold_idx, (train_index, test_index) in enumerate(iterator):
-            print(f"  Fold {fold_idx + 1}/5...", end=" ")
-            try:
-                if use_tree:
-                    rf = DecisionTreeClassifier(**args)
-                else:
-                    rf = RandomForestClassifier(**args)
-                rf.fit(X_train[train_index], y_train[train_index])
-                y_pred = rf.predict(X_train[test_index])
-                f1 = f1_score(y_train[test_index], y_pred, average="micro")
-                f1_scores_rf.append(f1)
-                print(f"F1: {f1:.4f}")
-            except Exception as e:
-                print(f"Error: {e}")
-                f1_scores_rf.append(np.nan)
+    f1_scores_forest = []
+    print("\nEvaluating Hyperbolic Random Forest...")
+    for fold_idx, (train_index, test_index) in enumerate(iterator):
+        print(f"  Fold {fold_idx + 1}/5...", end=" ")
+        try:
+            forest = HyperbolicRandomForestClassifier(**forest_args)
+            forest.fit(X_train[train_index], y_train[train_index])
+            y_pred = forest.predict(X_train[test_index])
+            f1 = f1_score(y_train[test_index], y_pred, average="micro")
+            f1_scores_forest.append(f1)
+            print(f"F1: {f1:.4f}")
+        except Exception as e:
+            print(f"Error: {e}")
+            f1_scores_forest.append(np.nan)
 
     t3 = time()
 
-    return f1_scores_hrf, f1_scores_rf, t2 - t1, t3 - t2, t1 - t0
+    return f1_scores_tree, f1_scores_forest, t2 - t1, t3 - t2, t1 - t0
 
 
 # ============================================================================
@@ -263,7 +248,7 @@ def evaluate_gaussian_hdt(dimension, seed, num_samples, params):
 # ============================================================================
 
 
-def run_benchmark(output_dir="results/gaussian_benchmark"):
+def run_benchmark(output_dir="test/other/results/gaussian"):
     """
     Run the full benchmark and save results.
 
@@ -278,14 +263,14 @@ def run_benchmark(output_dir="results/gaussian_benchmark"):
     print("GAUSSIAN HYPERBOLIC EMBEDDINGS BENCHMARK")
     print("=" * 80)
     print(f"\nConfiguration:")
+    print(f"  Classifiers: Hyperbolic Decision Tree & Hyperbolic Random Forest")
     print(f"  Dimensions: {dims}")
     print(f"  Seeds: {seeds}")
     print(f"  Training samples: {n_samples_train}")
     print(f"  Total samples: {n_samples}")
     print(f"  Max depth: {max_depth}")
-    print(f"  Number of trees: {num_classifiers}")
+    print(f"  Number of estimators (forest): {num_classifiers}")
     print(f"  Min samples leaf: {min_samples_leaf}")
-    print(f"  Classifiers: {clf_names}")
 
     # Initialize results dataframes
     results = pd.DataFrame(columns=["n_samples", "dataset", "dim", "seed", "clf", "fold", "f1_micro"])
@@ -311,43 +296,56 @@ def run_benchmark(output_dir="results/gaussian_benchmark"):
                 print("=" * 80)
 
                 # Run evaluation
-                f1_scores_hrf, f1_scores_rf, hrf_time, rf_time, init_time = evaluate_gaussian_hdt(
+                f1_scores_tree, f1_scores_forest, tree_time, forest_time, init_time = evaluate_gaussian_hdt(
                     dimension=dim,
                     seed=seed,
                     num_samples=n,
                     params=params,
                 )
 
-                # Save results to dataframe
-                scores = [f1_scores_hrf, f1_scores_rf]
-                ts = [hrf_time, rf_time]
-
-                for score_list, t, name in zip(scores, ts, clf_names):
-                    for fold, score in enumerate(score_list):
-                        results.loc[len(results)] = [
-                            int(n * 0.8),  # Training samples
-                            "gaussian",
-                            dim,
-                            seed,
-                            name,
-                            fold,
-                            score,
-                        ]
-                    times.loc[len(times)] = [
-                        int(n * 0.8),
+                # Save results to dataframe - Decision Tree
+                for fold, score in enumerate(f1_scores_tree):
+                    results.loc[len(results)] = [
+                        int(n * 0.8),  # Training samples
                         "gaussian",
                         dim,
                         seed,
-                        name,
-                        t,
-                        init_time,
+                        "tree",
+                        fold,
+                        score,
                     ]
 
-                # Save intermediate results (in case of failure)
-                results.to_csv(f"{output_dir}/gaussian_results.csv", index=False)
-                times.to_csv(f"{output_dir}/gaussian_times.csv", index=False)
+                # Save results to dataframe - Random Forest
+                for fold, score in enumerate(f1_scores_forest):
+                    results.loc[len(results)] = [
+                        int(n * 0.8),  # Training samples
+                        "gaussian",
+                        dim,
+                        seed,
+                        "forest",
+                        fold,
+                        score,
+                    ]
 
-                print(f"\nResults saved to {output_dir}/")
+                times.loc[len(times)] = [
+                    int(n * 0.8),
+                    "gaussian",
+                    dim,
+                    seed,
+                    "tree",
+                    tree_time,
+                    init_time,
+                ]
+
+                times.loc[len(times)] = [
+                    int(n * 0.8),
+                    "gaussian",
+                    dim,
+                    seed,
+                    "forest",
+                    forest_time,
+                    init_time,
+                ]
 
     # ========================================
     # Print Summary
@@ -356,18 +354,131 @@ def run_benchmark(output_dir="results/gaussian_benchmark"):
     print("BENCHMARK COMPLETE - SUMMARY")
     print("=" * 80)
 
-    # Group by classifier and compute mean/std
-    summary = results.groupby(["dim", "clf"])["f1_micro"].agg(["mean", "std", "count"])
-    print("\nF1 Micro Scores (mean ± std):")
-    print(summary)
+    # Group by dimension and classifier
+    print("\nHyperbolic Decision Tree F1 Micro Scores (mean ± std) by Dimension:")
+    tree_summary = results[results["clf"] == "tree"].groupby("dim")["f1_micro"].agg(["mean", "std", "count"])
+    print(tree_summary)
 
-    # Save summary
-    summary.to_csv(f"{output_dir}/gaussian_summary.csv")
+    print("\nHyperbolic Random Forest F1 Micro Scores (mean ± std) by Dimension:")
+    forest_summary = results[results["clf"] == "forest"].groupby("dim")["f1_micro"].agg(["mean", "std", "count"])
+    print(forest_summary)
 
-    print(f"\n✓ All results saved to {output_dir}/")
-    print(f"  - gaussian_results.csv (detailed results)")
-    print(f"  - gaussian_times.csv (timing information)")
-    print(f"  - gaussian_summary.csv (summary statistics)")
+    # ========================================
+    # Save results to text file (following hyperbolic_knn.py format)
+    # ========================================
+    from datetime import datetime
+
+    # Compute final results per dimension and classifier
+    final_results_tree = {}
+    final_results_forest = {}
+    for dim in dims:
+        tree_data = results[(results["dim"] == dim) & (results["clf"] == "tree")]
+        forest_data = results[(results["dim"] == dim) & (results["clf"] == "forest")]
+
+        final_results_tree[dim] = {
+            "f1_mean": tree_data["f1_micro"].mean(),
+            "f1_std": tree_data["f1_micro"].std(),
+            "count": len(tree_data),
+        }
+
+        final_results_forest[dim] = {
+            "f1_mean": forest_data["f1_micro"].mean(),
+            "f1_std": forest_data["f1_micro"].std(),
+            "count": len(forest_data),
+        }
+
+    # Find best dimension for each classifier
+    best_dim_tree = max(final_results_tree.keys(), key=lambda d: final_results_tree[d]["f1_mean"])
+    best_dim_forest = max(final_results_forest.keys(), key=lambda d: final_results_forest[d]["f1_mean"])
+
+    # Default output file path (following hyperbolic_knn.py pattern)
+    output_file = os.path.join(output_dir, "hyperbolic_rf_benchmark_results.txt")
+
+    with open(output_file, "w") as f:
+        # Write header with experiment configuration
+        f.write("=" * 90 + "\n")
+        f.write("HYPERBOLIC DECISION TREE/FOREST BENCHMARK RESULTS\n")
+        f.write("=" * 90 + "\n")
+        f.write(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+
+        f.write("CONFIGURATION:\n")
+        f.write("-" * 90 + "\n")
+        f.write(f"Dataset: Gaussian Hyperbolic Embeddings\n")
+        f.write(f"Classifiers: Hyperbolic Decision Tree & Hyperbolic Random Forest\n")
+        f.write(f"Number of Estimators (Forest): {num_classifiers}\n")
+        f.write(f"Max Depth: {max_depth}\n")
+        f.write(f"Min Samples Leaf: {min_samples_leaf}\n")
+        f.write(f"Dimensions Tested: {dims}\n")
+        f.write(f"Random Seeds: {seeds}\n")
+        f.write(f"Number of Iterations: {len(seeds)}\n")
+        f.write(f"Training Samples per Run: {n_samples_train[0]}\n")
+        f.write(f"Total Samples (before split): {n_samples[0]}\n")
+        f.write(f"Cross-validation Folds: 5\n")
+        f.write(f"Total Runs: {total_runs}\n")
+        f.write("\n")
+
+        # Write summary results
+        f.write("=" * 90 + "\n")
+        f.write(f"SUMMARY OF RESULTS (Mean ± Std over {len(seeds)} seed(s))\n")
+        f.write("=" * 90 + "\n\n")
+
+        f.write("HYPERBOLIC DECISION TREE:\n")
+        f.write(f"{'Dimension':<12} {'F1 Score':<20} {'Count':<8}\n")
+        f.write("-" * 90 + "\n")
+        for dim in sorted(final_results_tree.keys()):
+            r = final_results_tree[dim]
+            f.write(f"{dim:<12} " f"{r['f1_mean']:.4f} ± {r['f1_std']:.4f}      " f"{int(r['count']):<8}\n")
+        f.write(
+            f"\nBest dimension: {best_dim_tree} "
+            f"(F1: {final_results_tree[best_dim_tree]['f1_mean']:.4f} ± "
+            f"{final_results_tree[best_dim_tree]['f1_std']:.4f})\n\n"
+        )
+
+        f.write("\nHYPERBOLIC RANDOM FOREST:\n")
+        f.write(f"{'Dimension':<12} {'F1 Score':<20} {'Count':<8}\n")
+        f.write("-" * 90 + "\n")
+        for dim in sorted(final_results_forest.keys()):
+            r = final_results_forest[dim]
+            f.write(f"{dim:<12} " f"{r['f1_mean']:.4f} ± {r['f1_std']:.4f}      " f"{int(r['count']):<8}\n")
+        f.write(
+            f"\nBest dimension: {best_dim_forest} "
+            f"(F1: {final_results_forest[best_dim_forest]['f1_mean']:.4f} ± "
+            f"{final_results_forest[best_dim_forest]['f1_std']:.4f})\n"
+        )
+        f.write("=" * 90 + "\n\n")
+
+        # Write detailed iteration results if multiple seeds
+        if len(seeds) > 1:
+            f.write("=" * 90 + "\n")
+            f.write("DETAILED ITERATION RESULTS BY DIMENSION\n")
+            f.write("=" * 90 + "\n")
+
+            for dim in sorted(dims):
+                f.write(f"\n{'='*50}\n")
+                f.write(f"DIMENSION = {dim}\n")
+                f.write(f"{'='*50}\n\n")
+
+                # Decision Tree results
+                f.write("Hyperbolic Decision Tree:\n")
+                tree_data = results[(results["dim"] == dim) & (results["clf"] == "tree")]
+                for seed in seeds:
+                    seed_data = tree_data[tree_data["seed"] == seed]
+                    if len(seed_data) > 0:
+                        f1_scores = seed_data["f1_micro"].values
+                        f.write(f"  Seed {seed}: {f1_scores.tolist()}\n")
+                f.write(f"  Mean ± Std: {tree_data['f1_micro'].mean():.4f} ± {tree_data['f1_micro'].std():.4f}\n\n")
+
+                # Random Forest results
+                f.write("Hyperbolic Random Forest:\n")
+                forest_data = results[(results["dim"] == dim) & (results["clf"] == "forest")]
+                for seed in seeds:
+                    seed_data = forest_data[forest_data["seed"] == seed]
+                    if len(seed_data) > 0:
+                        f1_scores = seed_data["f1_micro"].values
+                        f.write(f"  Seed {seed}: {f1_scores.tolist()}\n")
+                f.write(f"  Mean ± Std: {forest_data['f1_micro'].mean():.4f} ± {forest_data['f1_micro'].std():.4f}\n")
+
+    print(f"\n✓ Results saved to: {output_file}")
 
 
 # ============================================================================
