@@ -30,7 +30,7 @@ This is a work-in-progress, but the objective is to have these methods:
 ## Installation
 
 ```bash
-pip install git+https://github.com/git-artes/hypeGRL
+pip install git+https://github.com/cicadaUY/hypeGRL
 ```
 
 You may also clone the repo and create your own hyperbolic method. The library is designed to be modular an easily extendible. 
@@ -39,7 +39,7 @@ You may also clone the repo and create your own hyperbolic method. The library i
 For development:
 
 ```bash
-git clone https://github.com/git-artes/hypeGRL
+git clone https://github.com/cicadaUY/hypeGRL
 cd hypeGRL
 pip install -e ".[dev]"
 ```
