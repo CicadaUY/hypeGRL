@@ -1,9 +1,0 @@
-[flake8]
-max-line-length = 140
-exclude = .git,__pycache__,old,build,dist,venv,env,.env,.venv,app/components/email_component/templates,test
-per-file-ignores =
-    # Module level import not at top of file. This is due newrelic initialization.
-    */app/__main__.py: E402
-
-ignore = E501, W291, W503, E203
-

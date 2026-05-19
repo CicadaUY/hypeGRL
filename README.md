@@ -1,75 +1,76 @@
-# Hyperbolic Embeddings
+# hypeGRL: Hyperbolic Graph Represenatation Learning
 
-This repository provides tools to train, evaluate, and visualize graph embeddings in hyperbolic space.
-Supported models include:
+Graph Representation Learning in hyperbolic (and Euclidean) spaces,
+with principled support for unknown edges and streaming graph updates.
 
-- Poincare Embeddings
-- Lorentz Embeddings
-- Poincare Maps
-- D-Mercator
-- Hydra
-- Hydra Plus
-- Hypermap
+## Overview
+
+`hypeGRL` provides a unified framework for embedding graphs into
+low-dimensional spaces — mostly hyperbolic but also some Euclidean — through the
+encoder-decoder formalism. In addition to constituing a unified framework for several (previously dispersed) embedding methods, a key contribution of `hypeGRL`is the treatment of
+**partially observed graphs**: rather than imputing unknown edges with
+zeros (which introduces bias), the framework jointly optimizes node
+embeddings and unknown adjacency entries, enforcing that the learned
+representations are insensitive to the unobserved edges.
+
+## Embedding methods 
+
+This is a work-in-progress, but the objective is to have these methods:
+
+| Method | Geometry | Gradient-based | Generative | Edge updates | Node updates |
+|---|---|---|---|---|---|
+| ASE / RDPG | Euclidean | Yes | Yes | Yes | Out-of-sample |
+| Poincaré Maps | Poincaré disk | Yes | Partial | Yes | Out-of-sample |
+| Poincaré Embeddings | Poincaré disk | Yes | Yes | Yes | Out-of-sample |
+| Lorentz Embeddings | Hyperboloid | Yes | Yes | Yes | Out-of-sample |
+| Hydra+ | Hyperboloid | No | No | Full refit | Full refit |
+| d-Mercator | Spherical | Yes | Yes | Full refit | Full refit |
 
 
-## Setup
-
-### Requirements:
-
-- Python 3.9+ is required
-- Git (for cloning repositories)
-
-### Build and install dependencies 
+## Installation
 
 ```bash
-make
+pip install git+https://github.com/git-artes/hypeGRL
 ```
 
-This will automatically:
+You may also clone the repo and create your own hyperbolic method. The library is designed to be modular an easily extendible. 
 
-1. Create a virtual environment (venv)
-2. Clone required repositories (if not already present):
-   - d-mercator
-   - hypermap
-   - lorentz-embeddings
-   - PoincareMaps
-3. Install required dependencies
-4. Set up local packages like d-mercator and hypermap
 
-**Note:** If you've already cloned the repositories manually, the Makefile will detect them and skip the cloning step.
+For development:
 
-## Usage
-
-### Activate virtual env
-
-```
-source venv/bin/activate
+```bash
+git clone https://github.com/git-artes/hypeGRL
+cd hypeGRL
+pip install -e ".[dev]"
 ```
 
-### Initialize Embedding Manager
+This way, instead of copying files to your site-packages, pip creates a link to your local folder. Any code you change in that folder is instantly used by Python.
 
+## Quick start
+
+```python
+import networkx as nx
+from hypegrl.embedders.poincare_maps import PoincareMapsEmbedder
+
+G = nx.karate_club_graph()
+unknown_edges = list(G.edges())[:5]
+
+embedder = PoincareMapsEmbedder(d=2, n_steps=300)
+embedder.fit(G, unknown_edges=unknown_edges)
+
+X = embedder.embeddings()
+print(X.shape)  # (34, 2)
 ```
-embedding_manager = HyperbolicEmbeddings(embedding_type="poincare_maps", config=config)
-```
 
-### Train embeddings
+## Documentation
 
-```
-embedding_manager.train(adjacency_matrix=A, model_path=model_path)
-```
+Full documentation at [hypegrl.readthedocs.io](https://hypegrl.readthedocs.io).
 
-### Plot embeddings
+## References
 
-```
-embedding_manager.plot_embeddings(labels=labels, edge_list=edge_list, save_path=plot_path)
-```
-
-
-## Examples
-
-
-### Tree Test
-
-```
-python -m test.tree_test.main --embedding_type='hypermap' --output_space='poincare'
-```
+- Klimovskaia et al., *Poincaré Maps for Analyzing Complex Hierarchies*, Nature Communications 2020.
+- Nickel & Kiela, *Poincaré Embeddings for Learning Hierarchical Representations*, NeurIPS 2017.
+- Nickel & Kiela, *Learning Continuous Hierarchies in the Lorentz Model*, ICML 2018.
+- Keller et al., *Hydra: A Method for Strain-Minimizing Hyperbolic Embedding*, J. Complex Networks 2021.
+- Scheinerman & Tucker, *Modeling Graphs Using Dot Product Representations*, Computational Statistics 2010.
+- Fiori et al., *Gradient-Based Spectral Embeddings of Random Dot Product Graphs*, IEEE TSIPN 2024.

@@ -1,24 +1,80 @@
-[tool.black]
-line-length = 140
-exclude = '''
-(
-    \.eggs
-  | \.git
-  | \.hg
-  | \.mypy_cache
-  | \.tox
-  | venv
-  | \.venv
-  | env
-  | \.env
-  | _build
-  | buck-out
-  | build
-  | dist
-  | local_storage
-  | logs
-)
-'''
-[tool.isort]
-profile = "black"
-line_length = 88
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hypeGRL"
+version = "0.1.0"
+description = "Graph Representation Learning in hyperbolic (and some Euclidean) spaces, with support for unknown edges and streaming updates"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Federico Larroca" },
+    { name = "Paola Bermolen" },
+    { name = "Sofia Perez Casulo" },
+    { name = "Marcelo Fiori" },
+    { name = "Bernardo Marenco" },
+]
+keywords = [
+    "graph representation learning",
+    "hyperbolic geometry",
+    "poincare embeddings",
+    "link prediction",
+    "unknown edges",
+    "streaming graphs",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "torch>=2.0",
+    "geoopt>=0.5",
+    "networkx>=3.0",
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "matplotlib>=3.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+    "ruff",
+]
+docs = [
+    "sphinx>=7.0",
+    "sphinx-rtd-theme",
+    "sphinx-autodoc-typehints",
+    "nbsphinx",
+    "jupyter",
+    "myst-parser",
+]
+all = ["hypegrl[dev,docs]"]
+
+[project.urls]
+Homepage = "https://github.com/git-artes/hypegrl"
+Documentation = "https://hypegrl.readthedocs.io"
+Repository = "https://github.com/git-artes/hypegrl"
+Issues = "https://github.com/git-artes/hypegrl/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["hypegrl*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=hypegrl --cov-report=term-missing"
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+select = ["E", "F", "W", "I"]

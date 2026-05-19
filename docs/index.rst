@@ -1,20 +1,46 @@
-.. Hyperbolic embeddings documentation master file, created by
-   sphinx-quickstart on Fri Jul 25 16:33:21 2025.
-   You can adapt this file completely to your liking, but it should at least
-   contain the root `toctree` directive.
-
-Welcome to Hyperbolic embeddings's documentation!
-=================================================
+hypeGRL
+=======
 
 .. toctree::
    :maxdepth: 2
-   :caption: Contents:
+   :caption: Getting started
 
+   tutorials/quickstart
 
+.. toctree::
+   :maxdepth: 2
+   :caption: Background material
 
-Indices and tables
-==================
+   background/hyperbolic_geometry
+   background/hyperbolic_graphs
+   background/encoder_decoder
 
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`
+.. toctree::
+   :maxdepth: 2
+   :caption: Embedding methods
+
+   methods/poincare_maps
+   methods/poincare_embeddings
+   methods/lorentz
+   methods/hydra
+   methods/dmercator
+   methods/ase
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Tutorials
+
+   tutorials/unknown_edges
+   tutorials/streaming
+   tutorials/graph_generation
+
+.. toctree::
+   :maxdepth: 2
+   :caption: API reference
+
+   api/embedders
+   api/unknown_edges
+   api/streaming
+   api/generation
+   api/visualization
+   api/manifolds

@@ -1,33 +1,47 @@
-# Configuration file for the Sphinx documentation builder.
-#
-# For the full list of built-in configuration values, see the documentation:
-# https://www.sphinx-doc.org/en/master/usage/configuration.html
+# Sphinx configuration for hypeGRL documentation
+import os, sys
+sys.path.insert(0, os.path.abspath(".."))
 
-# -- Project information -----------------------------------------------------
-# https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
-
-project = 'Hyperbolic embeddings'
-copyright = '2025, Sofía Pérez Casulo, Marcelo Fiori and Federico Larroca'
-author = 'Sofía Pérez Casulo, Marcelo Fiori and Federico Larroca'
-
-# -- General configuration ---------------------------------------------------
-# https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
+project = "hypeGRL"
+copyright = "2026, Federico Larroca, Paola Bermolen, Marcelo Fiori, Sofia Perez Casulo, Bernardo Marenco"
+author = "Federico Larroca, Paola Bermolen, Marcelo Fiori, Sofia Perez Casulo, Bernardo Marenco"
+release = "0.1.0"
 
 extensions = [
-    "sphinx.ext.duration",
-    "sphinx.ext.doctest",
     "sphinx.ext.autodoc",
-    "sphinx.ext.autosummary",
-    "sphinx.ext.intersphinx",
+    "sphinx.ext.napoleon",       # NumPy / Google style docstrings
+    "sphinx.ext.viewcode",       # links to source
+    "sphinx.ext.intersphinx",    # cross-links to torch, networkx docs
+    "sphinx_autodoc_typehints",
+    "nbsphinx",                  # render tutorial notebooks
+    "myst_parser",               # Markdown support
 ]
 
-templates_path = ['_templates']
-exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
+autodoc_default_options = {
+    "members": True,
+    "undoc-members": False,
+    "show-inheritance": True,
+    "inherited-members": True,
+}
 
+napoleon_numpy_docstring = True
+napoleon_google_docstring = False
 
+intersphinx_mapping = {
+    "python": ("https://docs.python.org/3", None),
+    "numpy": ("https://numpy.org/doc/stable", None),
+    "networkx": ("https://networkx.org/documentation/stable", None),
+    "torch": ("https://pytorch.org/docs/stable", None),
+}
 
-# -- Options for HTML output -------------------------------------------------
-# https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
+html_theme = "sphinx_rtd_theme"
+html_static_path = ["_static"]
 
-html_theme = 'alabaster'
-html_static_path = ['_static']
+exclude_patterns = ["_build", "**.ipynb_checkpoints"]
+nbsphinx_execute = "never"   # don't re-run notebooks on build
+
+autodoc_mock_imports = [
+    "torch",
+    "geoopt",
+    "networkx"
+    ]
