@@ -1,5 +1,7 @@
 # Hyperbolic Embeddings
 
+**Important** This branch is left as a reference, since it uses 3rd party implementations of the methods.
+
 This repository provides tools to train, evaluate, and visualize graph embeddings in hyperbolic space.
 Supported models include:
 
