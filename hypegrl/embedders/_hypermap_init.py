@@ -543,6 +543,9 @@ def hypermap_init(
 
         if t == 1:
             angles[i] = np.pi
+            if verbose:
+                print(f"[Phase1] t={t} node={nodes_sorted[i]} "
+                      f"theta={angles[i]:.6f} r={r_init[i]}")
             continue
 
         step = min(1.0 / t, 0.01)
@@ -559,7 +562,7 @@ def hypermap_init(
 
         if verbose:
             print(f"[Phase1] t={t} node={nodes_sorted[i]} "
-                  f"theta={best_angle:.6f}")
+                  f"theta={best_angle:.6f} r={r_init[i]}")
 
     r_final = np.zeros_like(r_init)
     # ── Phase 2: Fermi-Dirac MLE ──────────────────────────────────────────
@@ -664,4 +667,5 @@ def hypermap_init(
                         new_angle, _ = _grid_search_angle(logL_corr, step_c)
                         angles[jj]   = new_angle
 
+    print(r_final)
     return angles, r_final, nodes_sorted, params
