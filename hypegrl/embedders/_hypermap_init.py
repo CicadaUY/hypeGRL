@@ -449,15 +449,72 @@ def fd_loglikelihood(
     return logL
 
 
+def fd_loglikelihood_correction(
+    i: int,
+    theta_v: float,
+    *,
+    r_init: np.ndarray,
+    R: np.ndarray,
+    angles: np.ndarray,
+    adj: dict,
+    nodes_sorted: list,
+    params: dict,
+    nodes2compare: list[int],
+) -> float:
+    """
+    Fermi-Dirac log-likelihood for correction steps, mirroring C++ exactly.
+
+    Unlike fd_loglikelihood, this recomputes pair-wise radii from r_init for
+    every (v, l) pair based on who arrived later (larger r_init = later arrival),
+    and uses R of the later-arriving node — matching C++ lines 451-468.
+    """
+    zeta         = params["zeta"]
+    beta         = params["beta"]
+    zeta_over_2T = zeta / (2.0 * params["T"])
+    node_v       = nodes_sorted[i]
+
+    logL = 0.0
+    for j in nodes2compare:
+        if j == i:
+            continue
+        node_u = nodes_sorted[j]
+
+        # Determine who arrived later based on r_init (monotone in arrival time)
+        if r_init[i] > r_init[j]:   # v (node i) arrived after l (node j)
+            r_v   = r_init[i]
+            r_l   = beta * r_init[j] + (1.0 - beta) * r_v
+            R_use = R[i]
+        else:                        # l (node j) arrived after v (node i)
+            r_l   = r_init[j]
+            r_v   = beta * r_init[i] + (1.0 - beta) * r_l
+            R_use = R[j]
+
+        dtheta = angular_sep(theta_v, angles[j])
+        x      = hyperbolic_dist(r_v, r_l, dtheta, zeta)
+        P      = fermi_dirac(x, R_use, zeta_over_2T)
+        P      = np.clip(P, 1e-12, 1.0 - 1e-12)
+
+        if node_u in adj[node_v]:
+            logL += np.log(P)
+        else:
+            logL += np.log(1.0 - P)
+
+    return logL
+
+
 def _grid_search_angle(
     logL_fn,
     step: float,
     theta_start: float = 0.0,
     theta_end: float = 2.0 * np.pi,
+    strict: bool = False,
 ) -> tuple[float, float]:
     """
     Grid search over [theta_start, theta_end) with given step.
     Returns (best_angle, best_logL).
+
+    strict=True uses > (keep first occurrence on ties) — matches C++ Phase 1.
+    strict=False uses >= (keep last occurrence on ties) — matches C++ Phase 2 / corrections.
     """
     best_angle = theta_start
     best_logL  = _MAXLOGL_INIT
@@ -465,7 +522,7 @@ def _grid_search_angle(
 
     while theta <= theta_end:
         logL = logL_fn(theta)
-        if logL >= best_logL:
+        if (strict and logL > best_logL) or (not strict and logL >= best_logL):
             best_angle = theta
             best_logL  = logL
         theta += step
@@ -557,7 +614,7 @@ def hypermap_init(
                 adj=adj, nodes_sorted=nodes_sorted, params=params,
             )
 
-        best_angle, _ = _grid_search_angle(logL_cn, step)
+        best_angle, _ = _grid_search_angle(logL_cn, step, strict=True)
         angles[i] = best_angle
 
         if verbose:
@@ -656,10 +713,10 @@ def hypermap_init(
                         step_c = min(1.0 / (jj + 1), 0.01)
 
                         def logL_corr(theta_v, _jj=jj):
-                            return fd_loglikelihood(
+                            return fd_loglikelihood_correction(
                                 _jj, theta_v,
-                                r_final=r_final, R=R, angles=angles,
-                                is_here=is_here, adj=adj,
+                                r_init=r_init, R=R, angles=angles,
+                                adj=adj,
                                 nodes_sorted=nodes_sorted, params=params,
                                 nodes2compare=all_indices,
                             )
@@ -667,5 +724,4 @@ def hypermap_init(
                         new_angle, _ = _grid_search_angle(logL_corr, step_c)
                         angles[jj]   = new_angle
 
-    print(r_final)
     return angles, r_final, nodes_sorted, params
