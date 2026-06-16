@@ -23,6 +23,7 @@ hypeGRL
    methods/poincare_embeddings
    methods/lorentz
    methods/hydra
+   methods/hypermap
    methods/dmercator
    methods/ase
 
