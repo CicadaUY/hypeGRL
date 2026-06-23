@@ -16,6 +16,7 @@ from hypegrl.unknown_edges.joint_optimizer import (
     graph_to_tensor,
 )
 from hypegrl.embedders.hydra import HydraEmbedder
+from hypegrl.embedders.hydra_plus import HydraPlusEmbedder
 from hypegrl.manifolds.poincare import polar_to_poincare, poincare_distances_polar
 
 
@@ -294,3 +295,148 @@ def test_hydra_repr():
     emb = HydraEmbedder(dim=3, curvature=2.0)
     assert "dim=3" in repr(emb)
     assert "2.0" in repr(emb)
+
+
+# ── HydraPlusEmbedder ──────────────────────────────────────────────────────
+
+@pytest.fixture
+def hydra_plus_fitted(small_graph):
+    """HydraPlusEmbedder fitted on P_5 with a small step budget."""
+    emb = HydraPlusEmbedder(
+        dim=2, curvature=1.0, n_steps=30, log_every=0, random_state=0,
+    )
+    emb.fit(small_graph)
+    return emb
+
+
+def test_hydra_plus_fit_shape(hydra_plus_fitted):
+    assert hydra_plus_fitted.embeddings().shape == (5, 2)
+
+
+def test_hydra_plus_embeddings_inside_disk(hydra_plus_fitted):
+    norms = np.linalg.norm(hydra_plus_fitted.embeddings(), axis=1)
+    assert (norms < 1.0).all()
+
+
+def test_hydra_plus_loss_history_length(hydra_plus_fitted):
+    assert len(hydra_plus_fitted.loss_history) == 30
+
+
+def test_hydra_plus_loss_decreases(karate):
+    """Loss should fall over the optimisation run on a non-trivial graph."""
+    emb = HydraPlusEmbedder(
+        dim=2, curvature=1.0, n_steps=100, log_every=0, random_state=0,
+    )
+    emb.fit(karate)
+    assert emb.loss_history[-1] < emb.loss_history[0]
+
+
+def test_hydra_plus_stress_improves_over_hydra(karate):
+    """Riemannian refinement must not increase stress over the HYDRA warm start."""
+    emb = HydraPlusEmbedder(
+        dim=2, curvature=1.0, n_steps=100, log_every=0, random_state=0,
+    )
+    emb.fit(karate)
+    assert emb.stress <= emb.stress_init
+
+
+def test_hydra_plus_lower_stress_than_hydra_on_karate(karate):
+    """HYDRA+ must achieve strictly lower stress than vanilla HYDRA on the karate graph."""
+    hydra = HydraEmbedder(dim=2, curvature=1.0)
+    hydra.fit(karate)
+
+    hydra_plus = HydraPlusEmbedder(
+        dim=2, curvature=1.0, n_steps=200, log_every=0, random_state=0,
+    )
+    hydra_plus.fit(karate)
+
+    assert hydra_plus.stress < hydra.stress
+
+
+def test_hydra_plus_strain_init_matches_hydra(small_graph):
+    """strain_init must equal the strain of the standalone HYDRA spectral step."""
+    hydra = HydraEmbedder(dim=2, curvature=1.0, alpha=1.1, equi_adj=0.5)
+    hydra.fit(small_graph)
+    plus = HydraPlusEmbedder(
+        dim=2, curvature=1.0, alpha=1.1, equi_adj=0.5, n_steps=30, log_every=0,
+    )
+    plus.fit(small_graph)
+    assert plus.strain_init == pytest.approx(hydra.strain, abs=1e-10)
+
+
+def test_hydra_plus_accessors_set_after_fit(hydra_plus_fitted):
+    assert hydra_plus_fitted.stress        is not None
+    assert hydra_plus_fitted.stress_init   is not None
+    assert hydra_plus_fitted.strain        is not None
+    assert hydra_plus_fitted.strain_init   is not None
+    assert hydra_plus_fitted.loss_history  is not None
+
+
+def test_hydra_plus_fit_distance_shape(hyperbolic_points):
+    _, D = hyperbolic_points
+    emb = HydraPlusEmbedder(dim=2, curvature=1.0, n_steps=20, log_every=0)
+    emb.fit_distance(D)
+    assert emb.embeddings().shape == (15, 2)
+
+
+def test_hydra_plus_decode_shape(hydra_plus_fitted):
+    D_hat = hydra_plus_fitted.decode(hydra_plus_fitted.embeddings())
+    assert D_hat.shape == (5, 5)
+    np.testing.assert_allclose(np.diag(D_hat), 0.0, atol=1e-10)
+    np.testing.assert_allclose(D_hat, D_hat.T, atol=1e-10)
+
+
+def test_hydra_plus_stress_near_zero_for_exact_data(hyperbolic_points):
+    """Riemannian refinement on exact H² data should not blow up.
+
+    The HYDRA warm start already has stress ≈ 0, so the gradient is near
+    zero and the optimiser should not move far from the exact solution.
+    We verify that the final stress remains small (< 0.1), not that it
+    improves further from an already-exact embedding.
+    """
+    _, D = hyperbolic_points
+    emb = HydraPlusEmbedder(
+        dim=2, curvature=1.0, alpha=1.0, equi_adj=0.0,
+        n_steps=50, lr=1e-2, log_every=0, random_state=0,
+    )
+    emb.fit_distance(D)
+    assert emb.stress < 0.1
+
+
+def test_hydra_plus_reproducible(small_graph):
+    """Same random_state produces identical embeddings."""
+    def make():
+        e = HydraPlusEmbedder(
+            dim=2, curvature=1.0, n_steps=20, log_every=0, random_state=7,
+        )
+        e.fit(small_graph)
+        return e.embeddings()
+    np.testing.assert_array_equal(make(), make())
+
+
+def test_hydra_plus_unknown_edges_warns(small_graph):
+    emb = HydraPlusEmbedder(dim=2, n_steps=5, log_every=0)
+    with pytest.warns(UserWarning):
+        emb.fit(small_graph, unknown_edges=[(0, 1)])
+
+
+def test_hydra_plus_raises_before_fit():
+    emb = HydraPlusEmbedder()
+    with pytest.raises(RuntimeError, match="fit"):
+        emb.embeddings()
+
+
+def test_hydra_plus_capability_flags():
+    emb = HydraPlusEmbedder()
+    assert     emb.is_gradient_based()
+    assert not emb.is_generative()
+    assert not emb.supports_update()
+    assert not emb.supports_node_update()
+
+
+def test_hydra_plus_repr():
+    emb = HydraPlusEmbedder(dim=2, curvature=1.0, lr=0.01, n_steps=100)
+    assert "dim=2"      in repr(emb)
+    assert "1.0"        in repr(emb)
+    assert "lr=0.01"    in repr(emb)
+    assert "n_steps=100" in repr(emb)
