@@ -5,5 +5,7 @@
  - The tutorial part of the readthedocs site needs some further work.
  - All optimization should be performed in the Hyperboloid model by default.
  - Other visualizations should be available, not only the hyperbolic disk.
+ - Include methods for random sampling on the hyperbolic space and different ways of generating graphs from these samples.
+ - Isometries operations, such as translations (most importantly: ``centering'' around a node)
 
 
