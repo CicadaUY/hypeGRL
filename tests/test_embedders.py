@@ -10,7 +10,7 @@ from hypegrl.embedders.poincare_maps import (
     soft_decoder,
     symkl_loss_fn,
 )
-from hypegrl.unknown_edges.joint_optimizer import (
+from hypegrl.inference.joint_optimizer import (
     build_adjacency,
     logit_init,
     graph_to_tensor,

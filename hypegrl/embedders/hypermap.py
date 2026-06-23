@@ -55,13 +55,13 @@ from hypegrl.manifolds.poincare import (
     hyperspherical_to_poincare,
     poincare_to_hyperspherical,
 )
-from hypegrl.unknown_edges.joint_optimizer import (
+from hypegrl.inference.joint_optimizer import (
     graph_to_tensor,
     build_adjacency,
     logit_init,
 )
 from hypegrl.embedders._hypermap_init import hypermap_init, assign_radii
-from hypegrl.unknown_edges.joint_optimizer import joint_optimize
+from hypegrl.inference.joint_optimizer import joint_optimize
 
 
 def estimate_gamma(G, k_min=1):

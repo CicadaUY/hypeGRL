@@ -45,7 +45,7 @@ All embedders inherit from this. The mandatory interface is:
 
 Capability flags (`is_gradient_based`, `is_generative`, `supports_update`, `supports_node_update`) let callers query what a method supports without try/except.
 
-**`hypegrl/unknown_edges/joint_optimizer.py` — `joint_optimize()`**
+**`hypegrl/inference/joint_optimizer.py` — `joint_optimize()`**
 The central optimization engine. Gradient-based embedders delegate entirely to this function. It:
 - Wraps embeddings `X` as `geoopt.ManifoldParameter` (for Riemannian Adam on the correct manifold)
 - Reparametrizes unknown edge weights `a_Omega` through sigmoid to keep them in `(0, 1)`
@@ -74,7 +74,7 @@ Stubs exist for `lorentz.py`, `ase.py`, `dmercator.py`, `poincare_embeddings.py`
 
 `hypegrl/manifolds/lorentz.py` is a stub.
 
-### Imputation utilities (`hypegrl/unknown_edges/imputation.py`)
+### Imputation utilities (`hypegrl/inference/imputation.py`)
 
 - `compute_a_omega_init(G, unknown_edges)` — row/column mean heuristic for initializing unknown weights
 - `compute_results_imputation_unweighted(G, unknown_edges, a_omega)` — evaluation helper returning actual vs. predicted dicts for unweighted graphs

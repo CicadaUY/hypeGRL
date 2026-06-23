@@ -32,7 +32,7 @@ import torch
 
 from hypegrl.embedders.base import HyperbolicEmbedder
 from hypegrl.manifolds.poincare import POINCARE_BALL
-from hypegrl.unknown_edges.joint_optimizer import joint_optimize
+from hypegrl.inference.joint_optimizer import joint_optimize
 
 
 # ---------------------------------------------------------------------------

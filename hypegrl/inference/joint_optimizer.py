@@ -23,7 +23,7 @@ import networkx as nx
 import numpy as np
 import torch
 
-import hypegrl.unknown_edges.imputation as imputation
+import hypegrl.inference.imputation as imputation
 
 
 # ---------------------------------------------------------------------------

@@ -4,7 +4,7 @@ import networkx as nx
 import pytest
 import torch
 
-from hypegrl.unknown_edges.joint_optimizer import (
+from hypegrl.inference.joint_optimizer import (
     joint_optimize,
     graph_to_tensor,
     build_adjacency,
