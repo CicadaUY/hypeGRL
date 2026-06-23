@@ -13,7 +13,7 @@ Consider a graph :math:`G=(V,E)`. Graph Representation Learning (GRL) deals with
 
 where
 
-- :math:`\text{Enc}\left(\mathbf{A},\boldsymbol{\theta}_E\right)` is a function, parametric in :math:`\boldsymbol{\theta}_E`, that maps the adjacency matrix :math:`\mathbf{A}` to the set of vectors :math:`\{\mathbf{x}_i\}` (which we will stack in a matrix :math:`\mathbf{X}\in\mathbb{R}^{N\times d}`). In the case of shallow embeddings, such as ASE or Poincaré Maps (see below), the output is simply :math:`\mathbf{X}=\boldsymbol{\theta}_E`, but this framework is general enough to accommodate parametric models such as GNNs.
+- :math:`\text{Enc}\left(\mathbf{A},\boldsymbol{\theta}_E\right)` is a function, parametric in :math:`\boldsymbol{\theta}_E`, that maps the adjacency matrix :math:`\mathbf{A}` to the set of vectors :math:`\{\mathbf{x}_i\}` (which we will stack in a matrix :math:`\mathbf{X}\in\mathbb{R}^{N\times d}`). In the case of shallow embeddings, such as :doc:`ASE <../methods/ase>` or :doc:`Poincaré Maps <../methods/poincare_maps>`, the output is simply :math:`\mathbf{X}=\boldsymbol{\theta}_E`, but this framework is general enough to accommodate parametric models such as GNNs.
 
 - :math:`\text{Dec}\left(\mathbf{X},\boldsymbol{\theta}_D\right)` is another function that takes a set of embeddings and produces a (dis)similarity matrix :math:`\hat{\mathbf{A}}` between the node's embeddings. This is where the chosen underlying geometry plays a significant role, as these (dis)similarities are typically distance-based.
 

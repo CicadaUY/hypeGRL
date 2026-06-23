@@ -39,11 +39,27 @@ with geodesic distance given by
 
 It is common to write :math:`\mathbf{u}=(\mathbf{x},t)`, where the last coordinate plays the role of a time-like component, satisfying :math:`\|\mathbf{x}\|^2 - t^2 = -1` with :math:`t>0`. Geometrically, :math:`\mathbb{H}^n` corresponds to the upper sheet of a two-sheeted hyperboloid in :math:`\mathbb{R}^{n+1}`, and its geodesics are given by the intersections of the hyperboloid with Euclidean planes passing through the origin.
 
+.. figure:: ../figs/hyperboloide_v2.svg
+   :width: 600px
+   :align: center
+   :alt: Hyperboloid upper sheet
+
+   The hyperboloid model. Only the upper sheet (i.e.\ :math:`t>0`) is considered.
+
 The Lorentz model admits simple closed-form expressions for distances and gradients and provides a convenient global parametrization of hyperbolic space, making it particularly well suited for both theoretical analysis and optimization. This motivates its use as the default representation in ``HypeGRL``. Moreover, several alternative representations of hyperbolic space can be naturally interpreted in terms of the Lorentz model.
 
 Spherical (or native) representation
 ---------------------
-The spherical representation of hyperbolic space is the polar parametrization in terms of a radial coordinate :math:`r` (hyperbolic distance to the point at :math:`\mathbf{x}=\mathbf{0}` and :math:`t=1`) and angular coordinates :math:`\theta=(\theta_1,\theta_2,\ldots,\theta_{n-1})`. This means that for :math:`n=2` the distance between two points is
+The spherical representation of hyperbolic space is the polar parametrization in terms of a radial coordinate :math:`r` (hyperbolic distance to the point at :math:`\mathbf{x}=\mathbf{0}` and :math:`t=1`) and angular coordinates :math:`\theta=(\theta_1,\theta_2,\ldots,\theta_{n-1})`.
+
+.. figure:: ../figs/hyperboloide_to_native.svg
+   :width: 600px
+   :align: center
+   :alt: Spherical representation
+
+   Spherical representation of hyperbolic space for :math:`n=2`.
+
+This means that for :math:`n=2` the distance between two points is
 
 .. math::
 
@@ -55,14 +71,14 @@ The spherical representation of hyperbolic space is the polar parametrization in
    \sinh r_u \sinh r_v \cos(\theta_{u,v})
    \right).
 
-For large radii, this distance admits the asymptotic approximation
+with :math:`\theta_{u,v}` being the anglular separation between :math:`\mathbf{u}` and :math:`\mathbf{v}`. For large radii, this distance admits the asymptotic approximation
 
 .. math::
 
    d(\mathbf{u}, \mathbf{v})
    \approx
    r_u + r_v + 2\log(\theta_{u,v}/2),
-
+   
 which makes explicit the separation between radial growth, capturing hierarchical depth, and angular separation, capturing similarity. This decomposition underlies random hyperbolic graph models and the embedding methods built upon them.
 
 Poincaré ball model
@@ -73,4 +89,13 @@ The Poincaré (or Poincaré-Beltrami) ball model is obtained by stereographicall
 
    \mathbb{B}^{n} = \{\mathbf{y}\in \mathbb{R}^n : \|\mathbf{y}\|<1\},
 
-with the mapping from Lorentz coordinates :math:`(\mathbf{x},t)` given by :math:`\mathbf{y} = \frac{\mathbf{x}}{1+t}`. The Poincaré model is conformal, meaning that angles are preserved, and geodesics appear as circular arcs orthogonal to the boundary of the unit ball. Although distances become increasingly distorted near the boundary, this representation is particularly useful for geometric intuition and visualization.
+with the mapping from Lorentz coordinates :math:`(\mathbf{x},t)` given by :math:`\mathbf{y} = \frac{\mathbf{x}}{1+t}`.
+
+.. figure:: ../figs/hyperboloide_to_poincare_disk_v2.svg
+   :width: 600px
+   :align: center
+   :alt: Poincaré model
+
+   Transforming between hyperboloid and Poincaré models.
+   
+The Poincaré model is conformal, meaning that angles are preserved, and geodesics appear as circular arcs orthogonal to the boundary of the unit ball. Although distances become increasingly distorted near the boundary, this representation is particularly useful for geometric intuition and visualization.

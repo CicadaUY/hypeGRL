@@ -29,7 +29,7 @@ Unknown edges
 
 API reference
 -------------
-.. autoclass:: hypegrl.embedders.poincare_maps.PoincareMapsEmbedder
+.. autoclass:: hypegrl.embedders.hydra.HydraEmbedder
    :members:
 
 
