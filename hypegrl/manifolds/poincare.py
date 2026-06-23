@@ -405,6 +405,54 @@ def poincare_to_lorentz_torch(
     return torch.cat([x0, xr], dim=1)
 
 
+# ---------------------------------------------------------------------------
+# Poincaré ball distances  (NumPy)
+# ---------------------------------------------------------------------------
+
+def poincare_distances_polar(
+    r: np.ndarray,
+    directional: np.ndarray,
+    curvature: float = 1.0,
+) -> np.ndarray:
+    """
+    Pairwise geodesic distances in the Poincaré ball from polar coordinates.
+
+    Each point is represented as a radius ``r_i ∈ [0, 1)`` and a unit
+    direction vector ``directional_i``, so its Cartesian position is
+    ``x_i = r_i * directional_i``.  The geodesic distance formula is:
+
+    .. math::
+
+        d(x_i, x_j) = \\frac{1}{\\sqrt{k}}
+            \\operatorname{arccosh}\\!\\left(
+                1 + \\frac{2\\,\\|x_i - x_j\\|^2}
+                          {(1-r_i^2)(1-r_j^2)}
+            \\right)
+
+    where ``‖xᵢ − xⱼ‖² = rᵢ² + rⱼ² − 2 rᵢ rⱼ (directionalᵢ · directionalⱼ)``.
+
+    Parameters
+    ----------
+    r:
+        ``(N,)`` radial coordinates in ``[0, 1)``.
+    directional:
+        ``(N, d)`` unit direction vectors.
+    curvature:
+        Positive curvature ``k``; the model has sectional curvature ``-k``.
+
+    Returns
+    -------
+    ``(N, N)`` symmetric distance matrix with zero diagonal.
+    """
+    cos_sim = np.clip(directional @ directional.T, -1.0, 1.0)
+    ri, rj  = r[:, None], r[None, :]
+    num     = ri**2 + rj**2 - 2.0 * ri * rj * cos_sim
+    denom   = (1.0 - ri**2) * (1.0 - rj**2)
+    D = np.arccosh(np.maximum(1.0, 1.0 + 2.0 * num / denom)) / np.sqrt(curvature)
+    np.fill_diagonal(D, 0.0)
+    return D
+
+
 __all__ = [
     "POINCARE_BALL",
     # NumPy
@@ -414,6 +462,7 @@ __all__ = [
     "poincare_to_hyperspherical",
     "lorentz_to_poincare",
     "poincare_to_lorentz",
+    "poincare_distances_polar",
     # Torch
     "polar_to_poincare_torch",
     "hyperspherical_to_poincare_torch",

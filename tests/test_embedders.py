@@ -15,8 +15,8 @@ from hypegrl.unknown_edges.joint_optimizer import (
     logit_init,
     graph_to_tensor,
 )
-from hypegrl.embedders.hydra import HydraEmbedder, _hyperbolic_distance_pairwise
-from hypegrl.manifolds.poincare import polar_to_poincare
+from hypegrl.embedders.hydra import HydraEmbedder
+from hypegrl.manifolds.poincare import polar_to_poincare, poincare_distances_polar
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
@@ -210,7 +210,7 @@ def hyperbolic_points():
     X = polar_to_poincare(theta, r_H)
     r = np.linalg.norm(X, axis=1)
     directional = X / r[:, None]
-    D = _hyperbolic_distance_pairwise(r, directional, curvature=1.0)
+    D = poincare_distances_polar(r, directional, curvature=1.0)
     return X, D
 
 

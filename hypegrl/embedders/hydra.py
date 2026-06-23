@@ -42,6 +42,7 @@ from scipy.linalg import eigh
 from scipy.optimize import minimize_scalar
 
 from hypegrl.embedders.base import HyperbolicEmbedder
+from hypegrl.manifolds.poincare import poincare_distances_polar
 
 
 # ---------------------------------------------------------------------------
@@ -176,43 +177,6 @@ def _hydra_fixed_curvature(
     }
 
 
-def _hyperbolic_distance_pairwise(
-    r: np.ndarray,
-    directional: np.ndarray,
-    curvature: float,
-) -> np.ndarray:
-    """
-    Compute the full ``(N, N)`` pairwise Poincaré distance matrix.
-
-    Parameters
-    ----------
-    r:
-        ``(N,)`` radial coordinates in ``[0, 1)``.
-    directional:
-        ``(N, d)`` unit direction vectors.
-    curvature:
-        Positive hyperbolic curvature.
-
-    Returns
-    -------
-    ``(N, N)`` symmetric distance matrix with zero diagonal.
-    """
-    n = len(r)
-    # Cosine similarity matrix between direction vectors.
-    cos_sim = np.clip(directional @ directional.T, -1.0, 1.0)   # (N, N)
-
-    ri = r[:, None]   # (N, 1)
-    rj = r[None, :]   # (1, N)
-
-    num   = ri**2 + rj**2 - 2 * ri * rj * cos_sim
-    denom = (1 - ri**2) * (1 - rj**2)
-
-    acosh_arg = np.maximum(1.0, 1.0 + 2 * num / denom)
-    D_hat = np.arccosh(acosh_arg) / np.sqrt(curvature)
-    np.fill_diagonal(D_hat, 0.0)
-    return D_hat
-
-
 def _compute_stress(
     r: np.ndarray,
     directional: np.ndarray,
@@ -220,7 +184,7 @@ def _compute_stress(
     D: np.ndarray,
 ) -> float:
     """RMS stress between reconstructed and original distances."""
-    D_hat = _hyperbolic_distance_pairwise(r, directional, curvature)
+    D_hat = poincare_distances_polar(r, directional, curvature)
     mask  = np.triu(np.ones_like(D, dtype=bool), k=1)
     return float(np.sqrt(np.sum((D_hat[mask] - D[mask]) ** 2)))
 
@@ -458,7 +422,7 @@ class HydraEmbedder(HyperbolicEmbedder):
         if self._curvature_fitted is None:
             raise RuntimeError("Call fit() or fit_distance() before decode().")
         r, directional = _poincare_cartesian_to_polar(X)
-        return _hyperbolic_distance_pairwise(r, directional, self._curvature_fitted)
+        return poincare_distances_polar(r, directional, self._curvature_fitted)
 
     def distance(self, X: torch.Tensor, A: torch.Tensor) -> torch.Tensor:
         """
