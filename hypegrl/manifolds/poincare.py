@@ -406,6 +406,42 @@ def poincare_to_lorentz_torch(
 
 
 # ---------------------------------------------------------------------------
+# Poincaré ball isometries
+# ---------------------------------------------------------------------------
+
+def poincare_recenter(
+    X: np.ndarray,
+    center: np.ndarray,
+    curvature: float = 1.0,
+) -> np.ndarray:
+    """
+    Re-center a Poincaré ball embedding by mapping ``center`` to the origin.
+
+    Applies the Möbius transformation ``(-center) ⊕ X``, which is the unique
+    isometry of the Poincaré ball that sends ``center`` to **0** while
+    preserving all pairwise distances.  Useful for visualization: pass
+    ``X[i]`` to place node ``i`` at the center of the disk.
+
+    Parameters
+    ----------
+    X:
+        ``(N, d)`` embedding coordinates with row norms strictly less than 1.
+    center:
+        ``(d,)`` point to map to the origin, e.g. ``X[i]``.
+    curvature:
+        Positive curvature ``k`` of the Poincaré ball.
+
+    Returns
+    -------
+    ``(N, d)`` re-centered embedding with the same pairwise distances.
+    """
+    manifold = geoopt.PoincareBall(c=curvature)
+    X_t      = torch.as_tensor(X,      dtype=torch.float64)
+    center_t = torch.as_tensor(center, dtype=torch.float64)
+    return manifold.mobius_add(-center_t, X_t).numpy()
+
+
+# ---------------------------------------------------------------------------
 # Poincaré ball distances  (NumPy)
 # ---------------------------------------------------------------------------
 
@@ -446,7 +482,9 @@ def poincare_distances_polar(
     """
     cos_sim = np.clip(directional @ directional.T, -1.0, 1.0)
     ri, rj  = r[:, None], r[None, :]
-    num     = ri**2 + rj**2 - 2.0 * ri * rj * cos_sim
+    # When ri or rj is 0 the cos_sim term vanishes analytically, but NaN
+    # directionals (from dividing a zero-norm point) would propagate.
+    num     = ri**2 + rj**2 - 2.0 * ri * rj * np.nan_to_num(cos_sim)
     denom   = (1.0 - ri**2) * (1.0 - rj**2)
     D = np.arccosh(np.maximum(1.0, 1.0 + 2.0 * num / denom)) / np.sqrt(curvature)
     np.fill_diagonal(D, 0.0)
@@ -462,6 +500,7 @@ __all__ = [
     "poincare_to_hyperspherical",
     "lorentz_to_poincare",
     "poincare_to_lorentz",
+    "poincare_recenter",
     "poincare_distances_polar",
     # Torch
     "polar_to_poincare_torch",
