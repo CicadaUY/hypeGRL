@@ -15,6 +15,8 @@ from hypegrl.unknown_edges.joint_optimizer import (
     logit_init,
     graph_to_tensor,
 )
+from hypegrl.embedders.hydra import HydraEmbedder, _hyperbolic_distance_pairwise
+from hypegrl.manifolds.poincare import polar_to_poincare
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
@@ -194,3 +196,101 @@ def test_disconnection_raises_on_update(small_graph):
     # Removing an edge from a path graph disconnects it
     with pytest.raises(ValueError, match="disconnect"):
         emb.update(removed_edges=[(0, 1)])
+
+
+# ── HydraEmbedder ──────────────────────────────────────────────────────────
+
+@pytest.fixture
+def hyperbolic_points():
+    """15 random points in the Poincaré disk and their exact pairwise distances."""
+    rng = np.random.default_rng(42)
+    n = 15
+    r_H = rng.uniform(0.2, 2.5, size=n)
+    theta = rng.uniform(0, 2 * np.pi, size=n)
+    X = polar_to_poincare(theta, r_H)
+    r = np.linalg.norm(X, axis=1)
+    directional = X / r[:, None]
+    D = _hyperbolic_distance_pairwise(r, directional, curvature=1.0)
+    return X, D
+
+
+def test_hydra_fit_distance_shape(hyperbolic_points):
+    _, D = hyperbolic_points
+    emb = HydraEmbedder(dim=2, curvature=1.0, alpha=1.0, equi_adj=0.0)
+    emb.fit_distance(D)
+    assert emb.embeddings().shape == (15, 2)
+
+
+def test_hydra_embeddings_inside_disk(hyperbolic_points):
+    _, D = hyperbolic_points
+    emb = HydraEmbedder(dim=2, curvature=1.0, alpha=1.0, equi_adj=0.0)
+    emb.fit_distance(D)
+    norms = np.linalg.norm(emb.embeddings(), axis=1)
+    assert (norms < 1.0).all()
+
+
+def test_hydra_recovers_distances_from_exact_hyperbolic_data(hyperbolic_points):
+    """HYDRA recovers pairwise distances from an exact 2-D hyperbolic distance matrix.
+
+    Points in H^2 lie on a rank-3 Gram matrix (1 timelike + 2 spatial
+    eigenvalues); the spectral decomposition has zero residual, so the
+    decoded distances must match the originals modulo numerical noise,
+    regardless of which isometry maps the recovered coordinates to the
+    original ones.
+    """
+    _, D = hyperbolic_points
+    emb = HydraEmbedder(dim=2, curvature=1.0, alpha=1.0, equi_adj=0.0)
+    emb.fit_distance(D)
+
+    D_recovered = emb.decode(emb.embeddings())
+    np.testing.assert_allclose(D_recovered, D, atol=1e-5)
+
+
+def test_hydra_stress_near_zero_for_exact_data(hyperbolic_points):
+    """Stress must be negligible when input distances come from a true H^2 embedding."""
+    _, D = hyperbolic_points
+    emb = HydraEmbedder(dim=2, curvature=1.0, alpha=1.0, equi_adj=0.0)
+    emb.fit_distance(D)
+    assert emb.stress < 1e-5, f"Expected near-zero stress, got {emb.stress}"
+
+
+def test_hydra_fit_graph_shape(karate):
+    emb = HydraEmbedder(dim=2, curvature=1.0)
+    emb.fit(karate)
+    assert emb.embeddings().shape == (34, 2)
+
+
+def test_hydra_decode_shape(hyperbolic_points):
+    _, D = hyperbolic_points
+    emb = HydraEmbedder(dim=2, curvature=1.0, alpha=1.0, equi_adj=0.0)
+    emb.fit_distance(D)
+    D_hat = emb.decode(emb.embeddings())
+    assert D_hat.shape == (15, 15)
+    np.testing.assert_allclose(np.diag(D_hat), 0.0, atol=1e-10)
+    np.testing.assert_allclose(D_hat, D_hat.T, atol=1e-10)
+
+
+def test_hydra_unknown_edges_warns(small_graph):
+    emb = HydraEmbedder(dim=2)
+    with pytest.warns(UserWarning, match="non-gradient"):
+        emb.fit(small_graph, unknown_edges=[(0, 1)])
+
+
+def test_hydra_capability_flags():
+    emb = HydraEmbedder()
+    assert not emb.is_gradient_based()
+    assert not emb.is_generative()
+    assert not emb.supports_update()
+    assert not emb.supports_node_update()
+
+
+def test_hydra_raises_before_fit():
+    emb = HydraEmbedder()
+    with pytest.raises(RuntimeError, match="fit"):
+        emb.embeddings()
+
+
+def test_hydra_repr():
+    emb = HydraEmbedder(dim=3, curvature=2.0)
+    assert "dim=3" in repr(emb)
+    assert "2.0" in repr(emb)

@@ -125,8 +125,14 @@ def _hydra_fixed_curvature(
     directional = X_dir / norms         # (N, dim)  unit vectors
 
     # --- Radial part ------------------------------------------------------
-    x_min = np.min(x0)
-    r = np.sqrt((alpha * x0 - x_min) / (alpha * x0 + x_min))   # in [0,1)
+    # Per Keller-Ressel & Nargang (2021) Theorem 3.1 step B2:
+    # xmin := min(1, x0_1, ..., x0_n).  Including 1 ensures that for any
+    # valid H^d embedding (where all x0_i >= 1) the formula reduces to the
+    # exact stereographic projection sqrt((alpha*x0-1)/(alpha*x0+1)), giving
+    # zero stress.  The R reference implementation omits the 1 (a bug that is
+    # invisible on graph data where x0_min > 1 but breaks exact recovery).
+    x_min = min(1.0, float(np.min(x0)))
+    r = np.sqrt(np.maximum(0.0, (alpha * x0 - x_min) / (alpha * x0 + x_min)))
 
     # --- Angular adjustment (2-D only) ------------------------------------
     theta = None
