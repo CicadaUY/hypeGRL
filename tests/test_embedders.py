@@ -389,10 +389,14 @@ def test_hydra_plus_decode_shape(hydra_plus_fitted):
 def test_hydra_plus_stress_near_zero_for_exact_data(hyperbolic_points):
     """Riemannian refinement on exact H² data should not blow up.
 
-    The HYDRA warm start already has stress ≈ 0, so the gradient is near
-    zero and the optimiser should not move far from the exact solution.
-    We verify that the final stress remains small (< 0.1), not that it
-    improves further from an already-exact embedding.
+    The HYDRA warm start already has stress ≈ 0, so the true gradient is
+    near zero at initialisation. However, Adam degenerates to sign gradient
+    descent for tiny gradients: the update is m̂/(√v̂ + ε) ≈ sign(g) when
+    |g| ≪ ε, so even floating-point noise (~1e-14) drives a full step of
+    size lr ≈ 1e-2. This kicks the embedding away from the exact solution
+    rather than keeping it there. The tolerance of 0.1 therefore checks that
+    the optimizer does not catastrophically diverge, not that it improves an
+    already-exact embedding.
     """
     _, D = hyperbolic_points
     emb = HydraPlusEmbedder(

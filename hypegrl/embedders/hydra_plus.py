@@ -41,6 +41,7 @@ import torch
 
 # Cleanly reuse the parent class and internal helper from hydra
 from hypegrl.embedders.hydra import HydraEmbedder, _poincare_cartesian_to_polar
+from hypegrl.inference.riemannian_optimizer import riemannian_optimize
 
 
 # ---------------------------------------------------------------------------
@@ -147,11 +148,38 @@ class HydraPlusEmbedder(HydraEmbedder):
         self._strain_init = self._strain  # Strain is fixed by the spectral step
 
         # --- Step 2: Riemannian refinement --------------------------------
-        X_refined, loss_history = self._riemannian_refine(
-            X_init    = self._X,   # (N, dim) Cartesian Poincaré from warm-start
-            D         = D,         # (N, N) target distances
-            curvature = self._curvature_fitted,
+        ball  = geoopt.PoincareBall(c=1.0)
+        n     = len(D)
+        scale = float(np.sqrt(self._curvature_fitted))
+
+        # Project warm start strictly inside the ball before optimising.
+        X_init_proj = ball.projx(
+            torch.tensor(self._X, dtype=torch.float64)
+        ).numpy()
+
+        # Structural similarity: scaled distances so that d_1(x,y) matches
+        # D*sqrt(k), avoiding a curvature factor inside the loss.
+        s_A = D * scale
+
+        mask = np.triu(np.ones((n, n), dtype=bool), k=1)
+        mask_t = torch.as_tensor(mask)
+
+        def loss_fn(X: torch.Tensor, s_A_t: torch.Tensor) -> torch.Tensor:
+            return _stress_loss(X, s_A_t, ball, mask_t.to(X.device))
+
+        result = riemannian_optimize(
+            X_init    = X_init_proj,
+            s_A       = s_A,
+            loss_fn   = loss_fn,
+            manifold  = ball,
+            lr        = self.lr,
+            n_steps   = self.n_steps,
+            grad_clip = self.grad_clip,
+            log_every = self.log_every,
+            device    = self.device,
         )
+        X_refined    = result["X"]
+        loss_history = result["loss_history"]
 
         # --- Step 3: Update stored state with refined coordinates ---------
         self._X            = X_refined
@@ -278,63 +306,6 @@ class HydraPlusEmbedder(HydraEmbedder):
             strain_init = || cosh(sqrt(k) * D_hat_init) - cosh(sqrt(k) * D) ||_F
         """
         return self._strain_init
-
-    # ------------------------------------------------------------------
-    # Internal: Riemannian optimisation loop
-    # ------------------------------------------------------------------
-
-    def _riemannian_refine(
-        self,
-        X_init:    np.ndarray,
-        D:         np.ndarray,
-        curvature: float,
-    ) -> tuple[np.ndarray, list[float]]:
-        """Refine a Poincaré embedding by minimising stress via Riemannian Adam."""
-        dev = torch.device(self.device)
-        ball = geoopt.PoincareBall(c=1.0)
-
-        # Convert warm start and project strictly inside the unit ball.
-        X_t = torch.tensor(X_init, dtype=torch.float64, device=dev)
-        X_t = ball.projx(X_t)
-
-        scale   = float(np.sqrt(curvature))
-        D_t     = torch.tensor(D * scale, dtype=torch.float64, device=dev)
-
-        X_param = geoopt.ManifoldParameter(X_t, manifold=ball)
-        optimizer = geoopt.optim.RiemannianAdam(
-            [X_param], lr=self.lr, stabilize=10
-        )
-
-        n    = X_t.shape[0]
-        mask = torch.triu(
-            torch.ones(n, n, dtype=torch.bool, device=dev), diagonal=1
-        )
-
-        loss_history: list[float] = []
-
-        for step in range(self.n_steps):
-            optimizer.zero_grad()
-
-            loss = _stress_loss(X_param, D_t, ball, mask)
-            loss.backward()
-
-            if self.grad_clip > 0:
-                torch.nn.utils.clip_grad_norm_([X_param], self.grad_clip)
-
-            optimizer.step()
-
-            loss_val = loss.item()
-            loss_history.append(loss_val)
-
-            if self.log_every > 0 and (step + 1) % self.log_every == 0:
-                stress_rms = float(np.sqrt(loss_val / curvature))
-                print(
-                    f"[HydraPlus] step {step + 1:>{len(str(self.n_steps))}}"
-                    f"/{self.n_steps}  stress={stress_rms:.6f}"
-                )
-
-        X_refined = X_param.detach().cpu().numpy()
-        return X_refined, loss_history
 
     def __repr__(self) -> str:
         k = self.curvature if self.curvature is not None else "optimized"
