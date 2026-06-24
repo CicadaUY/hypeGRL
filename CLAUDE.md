@@ -62,8 +62,9 @@ Adding a new gradient-based embedder means implementing `distance()` and calling
 | `embedders/hypermap.py` | `HyperMapEmbedder` | Poincaré ball (d-dim) | Adjacency matrix | Fermi-Dirac NLL |
 | `embedders/hydra.py` | `HydraEmbedder` | Poincaré disk | Shortest-path distances | Stress (RMS distance error) |
 | `embedders/hydra_plus.py` | `HydraPlusEmbedder` | Poincaré disk | Shortest-path distances | Stress (RMS distance error) |
+| `embedders/dmercator.py` | `DMercatorEmbedder` | Poincaré ball (d-dim) via S^{d-1} | Binary adjacency | Fermi-Dirac NLL (S^D model) |
 
-Stubs exist for `lorentz.py`, `ase.py`, `dmercator.py`, `poincare_embeddings.py`, `out_of_sample.py`.
+Stubs exist for `lorentz.py`, `ase.py`, `poincare_embeddings.py`, `out_of_sample.py`.
 
 ### Manifold helpers
 
