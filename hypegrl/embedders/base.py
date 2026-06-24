@@ -29,9 +29,10 @@ class HyperbolicEmbedder(ABC):
         self,
         G: nx.Graph,
         unknown_edges: Optional[list[tuple[int, int]]] = None,
+        X_init: Optional[np.ndarray] = None,
     ) -> "HyperbolicEmbedder":
         """
-        Compute embeddings for all nodes in ``G``. Acts as the encode function, 
+        Compute embeddings for all nodes in ``G``. Acts as the encode function,
         but using the fitted parameters.
 
         Parameters
@@ -42,8 +43,13 @@ class HyperbolicEmbedder(ABC):
             Edges whose weights (or existence) are unknown. These are
             treated as free variables and jointly optimized with the
             embeddings. Gradient-based methods route through the joint
-            optimizer; non-gradient methods (e.g. Hydra+) fall back to
+            optimizer; non-gradient methods (e.g. Hydra) fall back to
             zero-imputation with a warning.
+        X_init:
+            ``(N, d)`` initial embeddings for gradient-based methods.
+            If ``None``, each method uses its own default initialisation
+            (e.g. random for Poincaré Maps, greedy for HyperMap, HYDRA
+            spectral step for HYDRA+). Ignored by non-gradient methods.
 
         Returns
         -------

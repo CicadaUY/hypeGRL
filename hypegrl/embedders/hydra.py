@@ -332,6 +332,7 @@ class HydraEmbedder(HyperbolicEmbedder):
         self,
         G: nx.Graph,
         unknown_edges: Optional[list[tuple[int, int]]] = None,
+        X_init: Optional[np.ndarray] = None,
     ) -> "HydraEmbedder":
         """
         Embed the graph ``G`` into hyperbolic space using HYDRA.
@@ -344,6 +345,8 @@ class HydraEmbedder(HyperbolicEmbedder):
         unknown_edges:
             Unsupported for non-gradient methods.  A warning is issued
             and these edges are zero-imputed (treated as absent).
+        X_init:
+            Ignored.  HYDRA is a closed-form method with no gradient step.
 
         Returns
         -------

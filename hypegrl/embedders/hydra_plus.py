@@ -127,48 +127,67 @@ class HydraPlusEmbedder(HydraEmbedder):
     # HyperbolicEmbedder interface
     # ------------------------------------------------------------------
 
-    def fit_distance(self, D: np.ndarray) -> "HydraPlusEmbedder":
+    def fit_distance(
+        self,
+        D: np.ndarray,
+        X_init: Optional[np.ndarray] = None,
+    ) -> "HydraPlusEmbedder":
         """
         Embed an arbitrary distance matrix directly into hyperbolic space using HYDRA+,
-        applying Riemannian gradient refinement on top of the spectral solution.
+        applying Riemannian gradient refinement on top of the warm start.
 
         Parameters
         ----------
         D:
             ``(N, N)`` symmetric pairwise distance matrix (zeros on diagonal).
+        X_init:
+            ``(N, dim)`` initial Poincaré coordinates for the Riemannian
+            refinement step.  If ``None``, the HYDRA spectral solution is
+            used as the warm start (default behaviour).  When provided, the
+            spectral step is skipped; curvature defaults to ``self.curvature``
+            or the previously fitted value (falls back to ``1.0`` if neither
+            is available).
 
         Returns
         -------
         self
         """
-        # --- Step 1: HYDRA spectral warm start via distance matrix --------
-        super().fit_distance(D)
+        mask_np = np.triu(np.ones(len(D), dtype=bool), k=1)
 
-        self._stress_init = self._stress  # Snapshot spectral performance
-        self._strain_init = self._strain  # Strain is fixed by the spectral step
+        if X_init is None:
+            # --- Step 1a: HYDRA spectral warm start -----------------------
+            super().fit_distance(D)
+            self._stress_init = self._stress
+            self._strain_init = self._strain
+            X_warm = self._X
+        else:
+            # --- Step 1b: external warm start -----------------------------
+            # Determine curvature: prefer previously fitted, then constructor
+            # value, fall back to 1.0.
+            if self._curvature_fitted is None:
+                self._curvature_fitted = self.curvature if self.curvature is not None else 1.0
+            self._D = D
+            D_hat = self.decode(X_init)
+            self._stress_init = float(np.sqrt(np.sum((D_hat[mask_np] - D[mask_np]) ** 2)))
+            A_hat_i = np.cosh(np.sqrt(self._curvature_fitted) * D_hat)
+            A_i     = np.cosh(np.sqrt(self._curvature_fitted) * D)
+            self._strain_init = float(np.sqrt(np.sum((A_hat_i - A_i) ** 2)))
+            X_warm = X_init
 
-        # --- Step 2: Riemannian refinement --------------------------------
+        # --- Step 2: Riemannian refinement (shared) -----------------------
         ball  = geoopt.PoincareBall(c=1.0)
         n     = len(D)
         scale = float(np.sqrt(self._curvature_fitted))
 
-        # Project warm start strictly inside the ball before optimising.
-        X_init_proj = ball.projx(
-            torch.tensor(self._X, dtype=torch.float64)
-        ).numpy()
-
-        # Structural similarity: scaled distances so that d_1(x,y) matches
-        # D*sqrt(k), avoiding a curvature factor inside the loss.
-        s_A = D * scale
-
-        mask = np.triu(np.ones((n, n), dtype=bool), k=1)
-        mask_t = torch.as_tensor(mask)
+        X_proj = ball.projx(torch.tensor(X_warm, dtype=torch.float64)).numpy()
+        s_A    = D * scale
+        mask_t = torch.as_tensor(np.triu(np.ones((n, n), dtype=bool), k=1))
 
         def loss_fn(X: torch.Tensor, s_A_t: torch.Tensor) -> torch.Tensor:
             return _stress_loss(X, s_A_t, ball, mask_t.to(X.device))
 
         result = riemannian_optimize(
-            X_init    = X_init_proj,
+            X_init    = X_proj,
             s_A       = s_A,
             loss_fn   = loss_fn,
             manifold  = ball,
@@ -181,30 +200,21 @@ class HydraPlusEmbedder(HydraEmbedder):
         X_refined    = result["X"]
         loss_history = result["loss_history"]
 
-        # --- Step 3: Update stored state with refined coordinates ---------
+        # --- Step 3: Update stored state ----------------------------------
         self._X            = X_refined
         self._loss_history = loss_history
         self._D            = D
-        self._G            = None  # Reset graph reference since input is a matrix
+        self._G            = None
 
-        # REUSE: Reconstruct distances efficiently using inherited decode()
         D_hat = self.decode(X_refined)
-        mask  = np.triu(np.ones(len(D), dtype=bool), k=1)
-
-        # Compute post-refinement true stress directly
-        self._stress  = float(np.sqrt(np.sum((D_hat[mask] - D[mask])**2)))
-
-        # Compute post-refinement strain directly
+        self._stress = float(np.sqrt(np.sum((D_hat[mask_np] - D[mask_np]) ** 2)))
         A_hat = np.cosh(np.sqrt(self._curvature_fitted) * D_hat)
         A     = np.cosh(np.sqrt(self._curvature_fitted) * D)
-        self._strain   = float(np.sqrt(np.sum((A_hat - A)**2)))
+        self._strain = float(np.sqrt(np.sum((A_hat - A) ** 2)))
 
-        # REUSE: Clean polar coordinates refresh using shared helper function
         self._r, self._directional = _poincare_cartesian_to_polar(X_refined)
         if self.dim == 2:
-            self._theta    = np.arctan2(
-                self._directional[:, 1], self._directional[:, 0]
-            )
+            self._theta = np.arctan2(self._directional[:, 1], self._directional[:, 0])
 
         return self
 
@@ -212,9 +222,10 @@ class HydraPlusEmbedder(HydraEmbedder):
         self,
         G: nx.Graph,
         unknown_edges: Optional[list[tuple[int, int]]] = None,
+        X_init: Optional[np.ndarray] = None,
     ) -> "HydraPlusEmbedder":
         """
-        Fit HYDRA+ embeddings from a graph: spectral warm start, then Riemannian refinement.
+        Fit HYDRA+ embeddings from a graph.
 
         Parameters
         ----------
@@ -223,6 +234,11 @@ class HydraPlusEmbedder(HydraEmbedder):
         unknown_edges:
             Not supported for HYDRA+; a warning is issued and they are
             zero-imputed.
+        X_init:
+            ``(N, dim)`` initial Poincaré coordinates.  If ``None``, the
+            HYDRA spectral solution is used as the warm start.  If provided,
+            the spectral step is skipped and gradient refinement starts from
+            ``X_init`` directly.
 
         Returns
         -------
@@ -245,7 +261,7 @@ class HydraPlusEmbedder(HydraEmbedder):
         D = self._shortest_path_matrix(G)
 
         # Delegate everything to the clean matrix-based embedding workflow
-        self.fit_distance(D)
+        self.fit_distance(D, X_init=X_init)
 
         # Keep track of graph source for evaluation compliance
         self._G = G

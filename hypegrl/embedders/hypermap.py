@@ -344,8 +344,8 @@ class HyperMapEmbedder(HyperbolicEmbedder):
         self,
         G: nx.Graph,
         unknown_edges: Optional[list[tuple[int, int]]] = None,
+        X_init: Optional[np.ndarray] = None,
         a_omega_init: Optional[np.ndarray] = None,
-        warm_start: bool = False,
     ) -> "HyperMapEmbedder":
         """
         Fit HyperMap embeddings.
@@ -356,13 +356,15 @@ class HyperMapEmbedder(HyperbolicEmbedder):
             Input graph.
         unknown_edges:
             Edges treated as unknown; jointly optimised with embeddings.
+        X_init:
+            ``(N, d)`` initial Poincaré ball embeddings for the gradient
+            refinement step.  Rows must be ordered to match
+            :attr:`nodes_sorted` (degree-descending).  If ``None`` (or if
+            this is the first call), the greedy HyperMap initialisation is
+            run to produce the starting point.
         a_omega_init:
-            Initial estimates for the unknown edges. If `None`, then this is 
+            Initial estimates for the unknown edges. If `None`, then this is
             estimated as the mean degree of the corresponding node.
-        warm_start:
-            If ``True`` and the embedder has already been fitted, skip
-            the greedy initialization and use current embeddings as the
-            starting point for gradient refinement.
 
         Returns
         -------
@@ -375,11 +377,11 @@ class HyperMapEmbedder(HyperbolicEmbedder):
         # estimate gamma if necessary
         if self.gamma is None:
             self.gamma, _ = estimate_gamma(G, k_min=3)
-            
-        # print("gamma: ", self.gamma)
-        
+
         # ── Stage 1: greedy initialization (always 2D) ───────────────────
-        if not warm_start or self._thetas_init is None:
+        # Run when X_init is not provided or on the first call (no cached
+        # node ordering yet).
+        if X_init is None or self._nodes_sorted is None:
             thetas, r_final, nodes_sorted, params = hypermap_init(
                 G,
                 gamma       = self.gamma,
@@ -397,10 +399,11 @@ class HyperMapEmbedder(HyperbolicEmbedder):
             _, R, _ = assign_radii(params)
             self._R = R
 
-        # ── Lift to d dimensions ─────────────────────────────────────────
-        X_init = _init_to_d_dimensions(
-            self._thetas_init, self._r_init, self.d, self.zeta
-        )
+        # ── Lift to d dimensions (only when not warm-starting) ───────────
+        if X_init is None:
+            X_init = _init_to_d_dimensions(
+                self._thetas_init, self._r_init, self.d, self.zeta
+            )
 
         # ── Stage 2: gradient refinement ─────────────────────────────────
         if self.n_steps == 0:
@@ -561,7 +564,7 @@ class HyperMapEmbedder(HyperbolicEmbedder):
                 if key not in known:
                     new_unknown.append(key)
 
-        return self.fit(G_new, unknown_edges=new_unknown, warm_start=True)
+        return self.fit(G_new, unknown_edges=new_unknown, X_init=self._X)
 
     # ------------------------------------------------------------------
     # Extra accessors
