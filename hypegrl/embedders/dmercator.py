@@ -4,9 +4,9 @@ D-Mercator graph embedder.
 Embeds a graph into hyperbolic space H^{D+1} (Poincaré ball B^d, d = D+1)
 following the geometric network model of Jankowski et al. (2023). The original
 D-Mercator pipeline produces the warm start in the S^D model; the embedding is
-then refined directly on the **Lorentz / hyperboloid manifold**, where both the
-angular position and the radial ("popularity") coordinate of every node move
-jointly under a hyperbolic-distance Fermi-Dirac likelihood.
+then refined directly on the **Poincaré ball**, where both the angular position
+and the radial ("popularity") coordinate of every node move jointly under a
+hyperbolic-distance Fermi-Dirac likelihood.
 
 Encoder-decoder framework
 -------------------------
@@ -17,13 +17,23 @@ Encoder-decoder framework
                             (``_dmercator_init.dmercator_init``):
                             κ/β inference → S^D-corrected Laplacian Eigenmaps
                             → likelihood-maximisation refinement → κ readjust
-    Warm start            : x_i = (cosh r_i, sinh r_i · v_i) ∈ H^{D+1}
+    Warm start            : x_i = tanh(r_i/2) · v_i ∈ B^d
                             with r_i = R̂ − (2/D) ln(κ_i/κ_min)  (Eq. 7)
-    Refinement            : Riemannian Adam on the Lorentz manifold minimising
+    Refinement            : Riemannian Adam on the Poincaré ball minimising
                             the Fermi-Dirac NLL on hyperbolic distances
     Decoder               : p_ij = 1 / (1 + e^{(β/2)(d_H(x_i,x_j) − R̂)})
     Loss                  : -Σ_{i<j}[a_ij ln p_ij + (1−a_ij) ln(1−p_ij)]
-    Output                : Poincaré ball coordinates (hyperboloid → ball)
+    Output                : Poincaré ball coordinates
+
+Why the Poincaré ball (and not the hyperboloid)
+-----------------------------------------------
+Both are exact models of H^{D+1}, and ``geoopt.PoincareBall.dist`` is the exact
+hyperbolic distance — no approximation. The choice is numerical: low-degree
+leaf nodes belong at large radius (``r ≈ R̂``, which reaches ~16–20 even for
+tiny graphs), and on the hyperboloid that means a timelike coordinate
+``cosh(r) ≈ 1e5``–``1e7`` that overflows off the manifold during optimisation
+(catastrophic for the D=1/Mercator, leaf-heavy regime). The Poincaré ball keeps
+coordinates bounded in (−1, 1), so it stays well-conditioned at those radii.
 
 The Fermi-Dirac connection probability on the exact hyperbolic distance
 reproduces the S^D model probability (Eq. 1) in the large-radius regime, since
@@ -46,7 +56,6 @@ from __future__ import annotations
 import warnings
 from typing import Optional
 
-import geoopt
 import networkx as nx
 import numpy as np
 import torch
@@ -56,11 +65,7 @@ from scipy.special import expit
 from hypegrl.embedders._dmercator_init import dmercator_init
 from hypegrl.embedders.base import HyperbolicEmbedder
 from hypegrl.inference.riemannian_optimizer import riemannian_optimize
-from hypegrl.manifolds.poincare import (
-    POINCARE_BALL,
-    lorentz_to_poincare,
-    poincare_to_lorentz,
-)
+from hypegrl.manifolds.poincare import POINCARE_BALL
 
 # ---------------------------------------------------------------------------
 # Fermi-Dirac NLL on hyperbolic distances
@@ -90,15 +95,14 @@ def _fermi_dirac_nll(
     return nll.sum()
 
 
-def _fermi_dirac_nll_lorentz(
+def _fermi_dirac_nll_poincare(
     X: torch.Tensor,
     A_t: torch.Tensor,
-    lorentz: geoopt.Lorentz,
     half_beta: float,
     R_hat: float,
 ) -> torch.Tensor:
-    """Fermi-Dirac NLL for hyperboloid points (pairwise Lorentz distances)."""
-    dist = lorentz.dist(X.unsqueeze(1), X.unsqueeze(0))  # (N, N)
+    """Fermi-Dirac NLL for Poincaré ball points (pairwise hyperbolic distances)."""
+    dist = POINCARE_BALL.dist(X.unsqueeze(1), X.unsqueeze(0))  # (N, N)
     return _fermi_dirac_nll(dist, A_t, half_beta, R_hat)
 
 
@@ -108,15 +112,14 @@ def _fermi_dirac_nll_lorentz(
 
 class DMercatorEmbedder(HyperbolicEmbedder):
     """
-    D-Mercator graph embedder with hyperbolic (Lorentz) refinement.
+    D-Mercator graph embedder with hyperbolic (Poincaré ball) refinement.
 
     The original D-Mercator pipeline provides the warm start (hidden-degree /
     inverse-temperature inference, S^D-corrected Laplacian Eigenmaps, and
     likelihood-maximisation refinement). The embedding is then refined on the
-    Lorentz / hyperboloid manifold by Riemannian Adam, minimising a
-    Fermi-Dirac negative log-likelihood on the exact hyperbolic distances —
-    so the radial ("popularity") and angular coordinates of every node move
-    jointly. Output embeddings are in the Poincaré ball B^d.
+    Poincaré ball by Riemannian Adam, minimising a Fermi-Dirac negative
+    log-likelihood on the exact hyperbolic distances — so the radial
+    ("popularity") and angular coordinates of every node move jointly.
 
     Parameters
     ----------
@@ -164,7 +167,6 @@ class DMercatorEmbedder(HyperbolicEmbedder):
 
         # Fitted state
         self._X: Optional[np.ndarray] = None           # (N, d) Poincaré ball
-        self._H: Optional[np.ndarray] = None           # (N, d+1) hyperboloid
         self._r: Optional[np.ndarray] = None           # hyperbolic radial coords
         self._kappa: Optional[np.ndarray] = None       # hidden degrees (from r)
         self._kappa_min: Optional[float] = None        # κ_min from init (κ-recovery)
@@ -197,11 +199,10 @@ class DMercatorEmbedder(HyperbolicEmbedder):
             Not yet supported; raises a warning and zero-imputes.
         X_init:
             ``(N, d)`` initial Poincaré ball coordinates for the hyperbolic
-            refinement. If given, they are mapped to the hyperboloid and used
-            in place of the original-method warm start (the init still runs
-            when the model parameters β, R̂ have not yet been inferred). If
-            ``None``, the full original D-Mercator pipeline provides the warm
-            start.
+            refinement. If given, they are used in place of the original-method
+            warm start (the init still runs when the model parameters β, R̂ have
+            not yet been inferred). If ``None``, the full original D-Mercator
+            pipeline provides the warm start.
         """
         if unknown_edges:
             warnings.warn(
@@ -231,21 +232,20 @@ class DMercatorEmbedder(HyperbolicEmbedder):
             self._R_hat = res["R_hat"]
             self._kappa_min = float(np.min(res["kappa"]))
             self._nodes = res["nodes"]
-            # warm-start hyperboloid point: x = (cosh r, sinh r · v)
+            # warm-start Poincaré ball point: x = tanh(r/2) · v
+            # (the stereographic image of the hyperboloid point (cosh r, sinh r·v))
             r0 = res["r"]
             V0 = res["V"]
-            H_init = np.concatenate(
-                [np.cosh(r0)[:, None], np.sinh(r0)[:, None] * V0], axis=1
-            )
+            X_warm = np.tanh(r0 / 2.0)[:, None] * V0
         else:
-            H_init = self._H  # placeholder; overwritten below when X_init given
+            X_warm = self._X  # placeholder; overwritten below when X_init given
 
         nodes = self._nodes
         self._G = G
 
-        # ── External warm start (Poincaré ball) → hyperboloid ──────────────
+        # ── External warm start (Poincaré ball) overrides the init's ───────
         if X_init is not None:
-            H_init = poincare_to_lorentz(np.asarray(X_init, dtype=np.float64))
+            X_warm = np.asarray(X_init, dtype=np.float64)
 
         beta = self._beta_fitted
         R_hat = self._R_hat
@@ -254,35 +254,36 @@ class DMercatorEmbedder(HyperbolicEmbedder):
         # ── Structural similarity (binary adjacency) ───────────────────────
         A = nx.to_numpy_array(G, nodelist=nodes, weight=None)
 
-        # ── Refinement: Riemannian Adam on the Lorentz manifold ────────────
+        # ── Refinement: Riemannian Adam on the Poincaré ball ───────────────
         if self.n_steps == 0:
-            H_opt = H_init
+            X_opt = POINCARE_BALL.projx(
+                torch.as_tensor(X_warm, dtype=torch.float64)).numpy()
             self._loss_history = []
         else:
-            lorentz = geoopt.Lorentz(k=1.0)
-
             def loss_fn(X: torch.Tensor, A_t: torch.Tensor) -> torch.Tensor:
-                return _fermi_dirac_nll_lorentz(X, A_t, lorentz, half_beta, R_hat)
+                return _fermi_dirac_nll_poincare(X, A_t, half_beta, R_hat)
 
             result = riemannian_optimize(
-                X_init=H_init,
+                X_init=POINCARE_BALL.projx(
+                    torch.as_tensor(X_warm, dtype=torch.float64)).numpy(),
                 s_A=A,
                 loss_fn=loss_fn,
-                manifold=lorentz,
+                manifold=POINCARE_BALL,
                 lr=self.lr,
                 n_steps=self.n_steps,
                 grad_clip=self.grad_clip,
                 log_every=self.log_every,
                 device=self.device,
             )
-            H_opt = result["X"]
+            X_opt = result["X"]
             self._loss_history = result["loss_history"]
 
-        self._H = H_opt
+        self._X = X_opt
 
-        # ── Output: hyperboloid → Poincaré ball; recover radial & κ ────────
-        self._X = lorentz_to_poincare(H_opt)
-        self._r = np.arccosh(np.clip(H_opt[:, 0], 1.0, None))
+        # ── Recover radial coordinate & κ from the refined positions ───────
+        # r_i = d_H(0, x_i) = 2·artanh(‖x_i‖) on the unit Poincaré ball.
+        norms = np.clip(np.linalg.norm(X_opt, axis=1), 0.0, 1.0 - 1e-12)
+        self._r = 2.0 * np.arctanh(norms)
         # κ_i = κ_min · exp((D/2)(R̂ − r_i)), inverse of the Eq. 7 radial map
         self._kappa = self._kappa_min * np.exp((D / 2.0) * (R_hat - self._r))
 
@@ -317,8 +318,7 @@ class DMercatorEmbedder(HyperbolicEmbedder):
         if self._R_hat is None or self._beta_fitted is None:
             raise RuntimeError("Call fit() before distance().")
 
-        dist = POINCARE_BALL.dist(X.unsqueeze(1), X.unsqueeze(0))
-        return _fermi_dirac_nll(dist, A, self._beta_fitted / 2.0, self._R_hat)
+        return _fermi_dirac_nll_poincare(X, A, self._beta_fitted / 2.0, self._R_hat)
 
     # ------------------------------------------------------------------
     # Capability flags
@@ -363,11 +363,6 @@ class DMercatorEmbedder(HyperbolicEmbedder):
     def radial(self) -> Optional[np.ndarray]:
         """``(N,)`` hyperbolic radial coordinates r_i = d_H(0, x_i)."""
         return self._r
-
-    @property
-    def hyperboloid(self) -> Optional[np.ndarray]:
-        """``(N, d+1)`` embeddings on the Lorentz / hyperboloid manifold."""
-        return self._H
 
     @property
     def nodes(self) -> Optional[list]:

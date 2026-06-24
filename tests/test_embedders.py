@@ -18,6 +18,8 @@ from hypegrl.inference.joint_optimizer import (
 from hypegrl.embedders.hydra import HydraEmbedder
 from hypegrl.embedders.hydra_plus import HydraPlusEmbedder
 from hypegrl.embedders.hypermap import HyperMapEmbedder
+from hypegrl.embedders.dmercator import DMercatorEmbedder
+from hypegrl.embedders._dmercator_init import compute_R
 from hypegrl.manifolds.poincare import polar_to_poincare, poincare_distances_polar
 
 
@@ -447,6 +449,207 @@ def test_hydra_plus_repr():
     assert "n_steps=100" in repr(emb)
 
 
+# ── DMercatorEmbedder ───────────────────────────────────────────────────────
+# D-Mercator embeds into hyperbolic space H^{D+1} (Poincaré ball B^d, d = D+1)
+# via the S^D geometric network model. Pipeline:
+#   1. original-method init (_dmercator_init): infer hidden degrees κ and the
+#      inverse temperature β, then place angular positions (model-corrected
+#      Laplacian Eigenmaps + likelihood maximisation);
+#   2. Riemannian-Adam refinement on the *Poincaré ball*, minimising a
+#      Fermi-Dirac NLL on the exact hyperbolic distances
+#      p_ij = 1/(1 + e^{(β/2)(d_H − R̂)}).
+# The refinement runs on the Poincaré ball (not the hyperboloid) purely for
+# numerical reasons: leaf nodes sit at large radius r ≈ R̂, where the
+# hyperboloid coordinate cosh(r) overflows; the ball keeps coords in (−1, 1).
+# See test_dmercator_robust_on_leaf_heavy_graph_d1 for the regression guard.
+
+@pytest.fixture
+def dmercator_fitted(karate):
+    """DMercatorEmbedder fitted on the karate graph with a small step budget."""
+    emb = DMercatorEmbedder(d=2, n_steps=30, log_every=0, random_state=0)
+    emb.fit(karate)
+    return emb
+
+
+def test_dmercator_fit_shape(dmercator_fitted):
+    # d = 2 ⇒ Poincaré ball B^2, one 2-vector per karate node.
+    assert dmercator_fitted.embeddings().shape == (34, 2)
+
+
+def test_dmercator_embeddings_inside_ball(dmercator_fitted):
+    # Output lives in the *open* Poincaré ball: every row norm is < 1.
+    # Low-degree nodes are pushed close to the boundary (large radius), so the
+    # margin can be tiny — but it must never reach or exceed 1.
+    norms = np.linalg.norm(dmercator_fitted.embeddings(), axis=1)
+    assert (norms < 1.0).all()
+    assert np.isfinite(norms).all()
+
+
+def test_dmercator_structural_similarity_is_binary(karate):
+    # D-Mercator is a *binary* model: edge weights are ignored. The karate graph
+    # ships with integer edge weights (1–7), so this guards the bug where a
+    # weighted adjacency would leak in and break the cross-entropy (a_ij ∉ {0,1}).
+    emb = DMercatorEmbedder(d=2, n_steps=0, log_every=0, random_state=0)
+    emb.fit(karate)
+    s = emb.structural_similarity(karate)
+    assert set(np.unique(s)).issubset({0.0, 1.0})
+    # 34-node karate club has 78 undirected edges.
+    assert s.sum() / 2 == 78
+
+
+def test_dmercator_decode_shape_and_range(dmercator_fitted):
+    # decode = Fermi-Dirac connection probabilities; symmetric, all in [0, 1].
+    P = dmercator_fitted.decode(dmercator_fitted.embeddings())
+    assert P.shape == (34, 34)
+    assert (P >= 0.0).all() and (P <= 1.0).all()
+    np.testing.assert_allclose(P, P.T, atol=1e-10)
+
+
+def test_dmercator_capability_flags():
+    # Gradient-based (Riemannian refinement) and generative (S^D model can
+    # sample graphs), like the other model-based embedders.
+    emb = DMercatorEmbedder()
+    assert emb.is_gradient_based()
+    assert emb.is_generative()
+
+
+def test_dmercator_raises_before_fit():
+    emb = DMercatorEmbedder()
+    with pytest.raises(RuntimeError):
+        emb.embeddings()
+
+
+def test_dmercator_repr():
+    # β defaults to "auto" (inferred) until the user fixes it.
+    r = repr(DMercatorEmbedder(d=3, n_steps=10))
+    assert "DMercatorEmbedder" in r
+    assert "d=3" in r
+
+
+def test_dmercator_d1_reduces_to_mercator(karate):
+    # ── The case we care about most ────────────────────────────────────────
+    # d = 2 ⇒ similarity dimension D = d − 1 = 1, i.e. the *original Mercator*
+    # model: the S^D sphere collapses to a circle S^1. The cleanest closed-form
+    # sanity check (pseudocode §7) is the sphere radius, which at D = 1 must be
+    #     R(N, 1) = N / (2π)
+    # because Γ(1)/(2π^1) = 1/(2π). This is the single most localised way to
+    # confirm the global-constant machinery (and the float division in the
+    # Γ/π prefactors) is correct.
+    emb = DMercatorEmbedder(d=2, n_steps=0, log_every=0, random_state=0)
+    emb.fit(karate)
+    N = karate.number_of_nodes()
+    assert emb.R_sphere == pytest.approx(N / (2.0 * np.pi))
+    # The standalone init helper must agree exactly.
+    assert compute_R(N, 1) == pytest.approx(N / (2.0 * np.pi))
+
+
+def test_dmercator_inferred_beta_exceeds_D(dmercator_fitted):
+    # β is inferred by matching the model's expected clustering to the
+    # empirical one. The model is only well defined for β > D (μ ∝ sin(Dπ/β)
+    # vanishes at β = D), so a valid inference must land strictly above D = 1.
+    assert dmercator_fitted.beta_fitted > 1.0
+
+
+def test_dmercator_fixed_beta_is_used(karate):
+    # Passing beta skips the clustering-matching inference and uses it verbatim.
+    emb = DMercatorEmbedder(d=2, beta=2.5, n_steps=0, log_every=0, random_state=0)
+    emb.fit(karate)
+    assert emb.beta_fitted == pytest.approx(2.5)
+
+
+def test_dmercator_beta_below_D_warns_and_clamps(karate):
+    # β must exceed D. For d = 3 (D = 2), asking for β = 1.5 ≤ D is invalid;
+    # the init warns and clamps it up to a usable value (> D).
+    emb = DMercatorEmbedder(d=3, beta=1.5, n_steps=0, log_every=0, random_state=0)
+    with pytest.warns(UserWarning):
+        emb.fit(karate)
+    assert emb.beta_fitted > 2.0
+
+
+def test_dmercator_loss_decreases(karate):
+    # The Fermi-Dirac NLL should fall over the refinement run. The original
+    # init is already strong, so the gain is modest but must be non-positive.
+    emb = DMercatorEmbedder(d=2, n_steps=100, log_every=0, random_state=0)
+    emb.fit(karate)
+    assert emb.loss_history[-1] <= emb.loss_history[0]
+
+
+def test_dmercator_n_steps_zero_returns_init(karate):
+    # n_steps = 0 short-circuits the refinement: it returns the (projected)
+    # original-method warm start with an empty loss history, yet still a valid
+    # embedding inside the ball. This is the hook the X_init-equivalence test
+    # uses to capture the pure initialisation.
+    emb = DMercatorEmbedder(d=2, n_steps=0, log_every=0, random_state=0)
+    emb.fit(karate)
+    assert emb.loss_history == []
+    assert (np.linalg.norm(emb.embeddings(), axis=1) < 1.0).all()
+
+
+def test_dmercator_reconstructs_adjacency(dmercator_fitted, karate):
+    # The decoder must assign higher connection probability to actual edges
+    # than to non-edges — a dependency-free proxy for embedding quality.
+    A = nx.to_numpy_array(karate, nodelist=dmercator_fitted.nodes, weight=None)
+    P = dmercator_fitted.decode(dmercator_fitted.embeddings())
+    mask = np.triu(np.ones_like(A, dtype=bool), k=1)
+    assert P[mask][A[mask] == 1].mean() > P[mask][A[mask] == 0].mean()
+
+
+def test_dmercator_radial_anticorrelates_with_degree(dmercator_fitted, karate):
+    # Core property of a hyperbolic embedding: "popularity ⇒ centrality".
+    # High-degree (popular) nodes get small radial coordinate r_i (near the
+    # centre); low-degree nodes are pushed out toward the boundary. So degree
+    # and radius are strongly *anti*-correlated. nodes order matches embeddings.
+    deg = np.array([karate.degree(n) for n in dmercator_fitted.nodes])
+    corr = np.corrcoef(deg, dmercator_fitted.radial)[0, 1]
+    assert corr < -0.5
+
+
+def test_dmercator_kappa_positive_and_tracks_degree(dmercator_fitted, karate):
+    # κ_i (hidden degree) is recovered from the refined radius via the inverse
+    # of Eq. 7; it must stay positive and, like an effective degree, correlate
+    # positively with the observed degree.
+    deg = np.array([karate.degree(n) for n in dmercator_fitted.nodes])
+    assert (dmercator_fitted.kappa > 0).all()
+    assert np.corrcoef(deg, dmercator_fitted.kappa)[0, 1] > 0.5
+
+
+def test_dmercator_reproducible(karate):
+    # Same seed ⇒ identical embedding (init RNG + deterministic RiemannianAdam).
+    e1 = DMercatorEmbedder(d=2, n_steps=20, log_every=0, random_state=7)
+    e2 = DMercatorEmbedder(d=2, n_steps=20, log_every=0, random_state=7)
+    e1.fit(karate)
+    e2.fit(karate)
+    np.testing.assert_array_equal(e1.embeddings(), e2.embeddings())
+
+
+def test_dmercator_robust_on_leaf_heavy_graph_d1():
+    # ── Regression guard for the manifold choice ───────────────────────────
+    # A Barabási–Albert tree (m = 1) is almost all degree-1 leaves. Those
+    # leaves belong at large radius r ≈ R̂ (which reaches ~16–20 even here).
+    # On the *hyperboloid* that means a coordinate cosh(r) ≈ 1e5–1e7 that
+    # overflows off the manifold during optimisation → NaN (it failed on ~6/8
+    # seeds). On the *Poincaré ball* coordinates stay bounded in (−1, 1), so
+    # the refinement is stable. This test pins that behaviour at D = 1, the
+    # worst case (largest R̂). β is fixed only to keep the test fast.
+    G = nx.barabasi_albert_graph(40, 1, seed=9)
+    for seed in range(4):
+        emb = DMercatorEmbedder(
+            d=2, beta=2.0, n_steps=80, log_every=0, random_state=seed,
+        )
+        emb.fit(G)
+        X = emb.embeddings()
+        assert np.isfinite(X).all()
+        assert (np.linalg.norm(X, axis=1) < 1.0).all()
+
+
+def test_dmercator_unknown_edges_warns(small_graph):
+    # Unknown-edge joint optimisation is not implemented yet for D-Mercator;
+    # it must warn and fall back rather than silently mishandle them.
+    emb = DMercatorEmbedder(d=2, n_steps=0, log_every=0, random_state=0)
+    with pytest.warns(UserWarning):
+        emb.fit(small_graph, unknown_edges=[(0, 4)])
+
+
 # ── X_init equivalence ────────────────────────────────────────────────────
 # For each gradient-based method: fitting with default init and n_steps=T
 # must give the same result as (1) capturing the default init via n_steps=0,
@@ -526,3 +729,35 @@ def test_hypermap_x_init_equivalent_to_default(karate):
     X_explicit = emb.embeddings()
 
     np.testing.assert_array_equal(X_full, X_explicit)
+
+
+def test_dmercator_x_init_equivalent_to_default(karate):
+    n_steps = 20
+
+    # Reuse one embedder so the inferred model parameters (β, R̂, κ) are cached
+    # after the first fit, letting the explicit-X_init call skip the expensive
+    # original-method init (β inference + likelihood maximisation) — same
+    # pattern as the HyperMap test above.
+
+    # Step 1: default path — original-method init + refinement.
+    emb = DMercatorEmbedder(d=2, n_steps=n_steps, log_every=0, random_state=0)
+    emb.fit(karate)
+    X_full = emb.embeddings()
+
+    # Step 2: capture the warm start via 0 refinement steps (re-runs init, but
+    # deterministically with the same seed, so the warm start is identical).
+    emb.n_steps = 0
+    emb.fit(karate)
+    X_init = emb.embeddings()
+
+    # Step 3: explicit path — params cached, init skipped, refine from X_init.
+    emb.n_steps = n_steps
+    emb.fit(karate, X_init=X_init)
+    X_explicit = emb.embeddings()
+
+    # Not bit-exact (unlike the other embedders): X_init is captured *after* the
+    # ball projection, so the explicit path re-projects an already-projected
+    # point. projx is idempotent only to machine precision, and RiemannianAdam
+    # mildly amplifies that ~1e-16 difference over the refinement — hence
+    # assert_allclose rather than assert_array_equal.
+    np.testing.assert_allclose(X_full, X_explicit, atol=1e-6)
