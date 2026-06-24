@@ -31,7 +31,10 @@ Pipeline (``dmercator_init``):
 Degree-one nodes are dropped before Stages 2–3 and reinserted afterward.
 
 Equation numbers refer to the paper. Underspecified bits follow the official
-implementation at github.com/networkgeometry/d-mercator (see comments).
+implementation at github.com/networkgeometry/d-mercator (see comments). The full
+step-by-step specification this module tracks — with the §-numbers cited in the
+comments below — lives in ``docs/methods/dmercator_pseudocode.md``; keep the two
+in sync.
 """
 
 from __future__ import annotations
