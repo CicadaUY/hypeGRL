@@ -17,6 +17,7 @@ from hypegrl.inference.joint_optimizer import (
 )
 from hypegrl.embedders.hydra import HydraEmbedder
 from hypegrl.embedders.hydra_plus import HydraPlusEmbedder
+from hypegrl.embedders.hypermap import HyperMapEmbedder
 from hypegrl.manifolds.poincare import polar_to_poincare, poincare_distances_polar
 
 
@@ -444,3 +445,84 @@ def test_hydra_plus_repr():
     assert "1.0"        in repr(emb)
     assert "lr=0.01"    in repr(emb)
     assert "n_steps=100" in repr(emb)
+
+
+# ── X_init equivalence ────────────────────────────────────────────────────
+# For each gradient-based method: fitting with default init and n_steps=T
+# must give the same result as (1) capturing the default init via n_steps=0,
+# then (2) providing that init explicitly with the same n_steps=T.
+# This verifies that the X_init code path is equivalent to the default path
+# and that nothing breaks when the user externalises the initialisation.
+
+
+def test_poincare_maps_x_init_equivalent_to_default(small_graph):
+    n_steps = 20
+
+    # Default path
+    emb1 = PoincareMapsEmbedder(d=2, n_steps=n_steps, log_every=0, random_state=0)
+    emb1.fit(small_graph)
+    X_full = emb1.embeddings()
+
+    # Capture the default initialisation (0 gradient steps)
+    emb0 = PoincareMapsEmbedder(d=2, n_steps=0, log_every=0, random_state=0)
+    emb0.fit(small_graph)
+    X_init = emb0.embeddings()
+
+    # Explicit X_init path
+    emb2 = PoincareMapsEmbedder(d=2, n_steps=n_steps, log_every=0, random_state=0)
+    emb2.fit(small_graph, X_init=X_init)
+    X_explicit = emb2.embeddings()
+
+    np.testing.assert_array_equal(X_full, X_explicit)
+
+
+def test_hydra_plus_x_init_equivalent_to_default(small_graph):
+    n_steps = 20
+
+    # Default path (HYDRA spectral warm start)
+    emb1 = HydraPlusEmbedder(
+        dim=2, curvature=1.0, n_steps=n_steps, log_every=0, random_state=0,
+    )
+    emb1.fit(small_graph)
+    X_full = emb1.embeddings()
+
+    # Capture the HYDRA warm start (0 refinement steps)
+    emb0 = HydraPlusEmbedder(
+        dim=2, curvature=1.0, n_steps=0, log_every=0, random_state=0,
+    )
+    emb0.fit(small_graph)
+    X_init = emb0.embeddings()
+
+    # Explicit X_init path (skips spectral step, starts refinement from X_init)
+    emb2 = HydraPlusEmbedder(
+        dim=2, curvature=1.0, n_steps=n_steps, log_every=0, random_state=0,
+    )
+    emb2.fit(small_graph, X_init=X_init)
+    X_explicit = emb2.embeddings()
+
+    np.testing.assert_array_equal(X_full, X_explicit)
+
+
+def test_hypermap_x_init_equivalent_to_default(karate):
+    n_steps = 10
+
+    # Reuse the same embedder instance throughout so that _nodes_sorted is
+    # cached after the first fit, letting the explicit-X_init call (step 3)
+    # skip the expensive greedy init.  Total greedy init calls: 2 instead of 3.
+
+    # Step 1: default path — greedy init (#1) + gradient refinement
+    emb = HyperMapEmbedder(d=2, n_steps=n_steps, log_every=0)
+    emb.fit(karate)
+    X_full = emb.embeddings()
+
+    # Step 2: capture the greedy initialisation via 0 gradient steps (greedy init #2).
+    emb.n_steps = 0
+    emb.fit(karate)
+    X_init = emb.embeddings()
+
+    # Step 3: explicit path — _nodes_sorted already set, greedy init skipped.
+    emb.n_steps = n_steps
+    emb.fit(karate, X_init=X_init)
+    X_explicit = emb.embeddings()
+
+    np.testing.assert_array_equal(X_full, X_explicit)
