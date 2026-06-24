@@ -33,6 +33,7 @@ import torch
 from hypegrl.embedders.base import HyperbolicEmbedder
 from hypegrl.manifolds.poincare import POINCARE_BALL
 from hypegrl.inference.joint_optimizer import joint_optimize
+from hypegrl.inference.riemannian_optimizer import riemannian_optimize
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +98,38 @@ def soft_decoder(X: torch.Tensor, gamma: float = 1.0) -> torch.Tensor:
 # Loss
 # ---------------------------------------------------------------------------
 
+def symkl_loss_fixed_q(
+    X: torch.Tensor,
+    Q: torch.Tensor,
+    gamma: float = 1.0,
+    eps: float = 1e-12,
+) -> torch.Tensor:
+    """
+    Symmetric KL divergence loss given a precomputed forest matrix ``Q``.
+
+        \\mathcal{L} = \\sum_i \\mathrm{SymKL}(\\hat{A}_i,\\, Q_i)
+
+    Parameters
+    ----------
+    X:
+        ``(N, d)`` embeddings on the Poincare disk.
+    Q:
+        ``(N, N)`` forest matrix ``(I + L)^{-1}``, precomputed by the caller.
+    gamma:
+        Decoder temperature.
+    eps:
+        Numerical floor for log arguments.
+
+    Returns
+    -------
+    Scalar loss tensor.
+    """
+    A_hat = soft_decoder(X, gamma)
+    A_hat = torch.clamp(A_hat, min=eps)
+    Q     = torch.clamp(Q,     min=eps)
+    return (A_hat * (A_hat / Q).log() + Q * (Q / A_hat).log()).sum()
+
+
 def symkl_loss_fn(
     X: torch.Tensor,
     A: torch.Tensor,
@@ -106,7 +139,10 @@ def symkl_loss_fn(
     """
     Symmetric KL divergence loss for Poincare Maps.
 
-        \\mathcal{L} = \\sum_i \\mathrm{SymKL}(\\hat{A}_i,\\, Q_i)
+    Computes ``Q = forest_matrix(A)`` then delegates to
+    ``symkl_loss_fixed_q``. Use this when ``A`` varies across steps (joint
+    optimisation with unknown edges). When ``A`` is fixed, prefer
+    precomputing ``Q`` once and calling ``symkl_loss_fixed_q`` directly.
 
     Parameters
     ----------
@@ -123,11 +159,7 @@ def symkl_loss_fn(
     -------
     Scalar loss tensor.
     """
-    A_hat = soft_decoder(X, gamma)
-    Q     = forest_matrix(A)
-    A_hat = torch.clamp(A_hat, min=eps)
-    Q     = torch.clamp(Q,     min=eps)
-    return (A_hat * (A_hat / Q).log() + Q * (Q / A_hat).log()).sum()
+    return symkl_loss_fixed_q(X, forest_matrix(A), gamma, eps)
 
 
 # ---------------------------------------------------------------------------
@@ -248,30 +280,50 @@ class PoincareMapsEmbedder(HyperbolicEmbedder):
         if X_init is None:
             X_init = np.random.randn(N, self.d) * 0.1
 
-        # Closure capturing gamma for the loss function
-        gamma = self.gamma
-        # def _loss(X: torch.Tensor, A: torch.Tensor) -> torch.Tensor:
-        #     return symkl_loss_fn(X, A, gamma=gamma)
+        if not unknown_edges:
+            # Fixed graph: precompute Q = (I+L)^{-1} once and hold it constant.
+            A_t = torch.tensor(
+                nx.to_numpy_array(G, dtype=np.float64), dtype=torch.float64
+            )
+            Q = forest_matrix(A_t).numpy()
 
-        result = joint_optimize(
-            G           = G,
-            loss_fn     = self.distance,
-            X_init      = X_init,
-            manifold    = POINCARE_BALL,
-            unknown_edges   = unknown_edges,
-            a_omega_init    = a_omega_init,
-            lr_X         = self.lr_X,
-            lr_a         = self.lr_a,
-            n_steps      = self.n_steps,
-            regularize_a = self.regularize_a,
-            grad_clip    = self.grad_clip,
-            log_every    = self.log_every,
-            device       = self.device,
-            verbose      = self.log_every > 0,
-        )
+            gamma = self.gamma
+            def loss_fn(X: torch.Tensor, Q_t: torch.Tensor) -> torch.Tensor:
+                return symkl_loss_fixed_q(X, Q_t, gamma)
+
+            result = riemannian_optimize(
+                X_init    = X_init,
+                s_A       = Q,
+                loss_fn   = loss_fn,
+                manifold  = POINCARE_BALL,
+                lr        = self.lr_X,
+                n_steps   = self.n_steps,
+                grad_clip = self.grad_clip,
+                log_every = self.log_every,
+                device    = self.device,
+            )
+            self._a_omega = np.array([])
+
+        else:
+            result = joint_optimize(
+                G             = G,
+                loss_fn       = self.distance,
+                X_init        = X_init,
+                manifold      = POINCARE_BALL,
+                unknown_edges = unknown_edges,
+                a_omega_init  = a_omega_init,
+                lr_X          = self.lr_X,
+                lr_a          = self.lr_a,
+                n_steps       = self.n_steps,
+                regularize_a  = self.regularize_a,
+                grad_clip     = self.grad_clip,
+                log_every     = self.log_every,
+                device        = self.device,
+                verbose       = self.log_every > 0,
+            )
+            self._a_omega = result["a_omega"]
 
         self._X             = result["X"]
-        self._a_omega       = result["a_omega"]
         self._loss_history  = result["loss_history"]
         self._unknown_edges = unknown_edges
         self._G             = G
