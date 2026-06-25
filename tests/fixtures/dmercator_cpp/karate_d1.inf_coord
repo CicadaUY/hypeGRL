@@ -1,0 +1,81 @@
+# =~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=
+# Embedding started at:  2025/09/16 14:41 UTC
+# Ended at:              2025/09/16 14:41 UTC
+# Elapsed CPU time:      1.02539 seconds
+# Edgelist file:         ../python/data/karate_club.edge
+#
+# Parameters
+#   - nb. vertices:      34
+#   - beta:              2.17864
+#   - mu:                0.0749457
+#   - radius_S1:         5.41127
+#   - radius_H2:         10.8241
+#   - kappa_min:         0.80275
+# =~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=
+#        Vertex       Inf.Kappa       Inf.Theta    Inf.Hyp.Rad. 
+              0         26.4849         2.34697         3.83151 
+              1         9.39399         1.66789         5.90453 
+              2         15.7016        0.550678         4.87715 
+              3           5.204         1.86596         7.08581 
+              4          3.1441         3.17092         8.09361 
+              5         3.73159         3.35702           7.751 
+              6         3.64594         3.38016         7.79744 
+              7         2.84879         1.86144         8.29088 
+              8         5.59689        0.765986         6.94024 
+              9          1.8893        0.456857         9.11226 
+             10         3.23198         3.15292         8.03848 
+             11         0.80275         2.42752         10.8241 
+             12           1.693         2.00524         9.33166 
+             13         4.17611         1.71173         7.52591 
+             14         1.82146         5.74061         9.18539 
+             15         1.41372         5.86292         9.69221 
+             16         1.14562          3.3914         10.1128 
+             17         2.38629         2.17084         8.64519 
+             18         1.24172         6.06504         9.95168 
+             19         3.17409         1.37615         8.07462 
+             20         1.57476         6.17394         9.47646 
+             21         1.66431           1.559         9.36584 
+             22         1.31099         5.97018          9.8431 
+             23         6.51841         4.92752         6.63541 
+             24         2.38977         4.35679         8.64228 
+             25         2.30204         4.31507         8.71707 
+             26         1.52742         5.17084         9.53751 
+             27         4.70604         4.56856         7.28697 
+             28         3.61661         4.14808         7.81359 
+             29          4.0423         5.16378         7.59104 
+             30         4.17506          0.9331         7.52641 
+             31         5.71976         4.28276         6.89681 
+             32         16.3572         6.05656         4.79533 
+             33         30.0021         5.74715         3.58213 
+#
+# =~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=
+# Internal parameters and options
+#     ALREADY_INFERRED_PARAMETERS_FILENAME   
+#     BETA_ABS_MAX                           25
+#     BETA_ABS_MIN                           1.01
+#     CHARACTERIZATION_MODE                  false
+#     CHARACTERIZATION_NB_GRAPHS             100
+#     CLEAN_RAW_OUTPUT_MODE                  false
+#     CUSTOM_BETA                            false
+#     CUSTOM_INFERRED_COORDINATES            false
+#     CUSTOM_OUTPUT_ROOTNAME_MODE            false
+#     CUSTOM_SEED                            false
+#     EDGELIST_FILENAME:                     ../python/data/karate_club.edge
+#     EXP_CLUST_NB_INTEGRATION_MC_STEPS      600
+#     EXP_DIST_NB_INTEGRATION_STEPS          1000
+#     KAPPA_MAX_NB_ITER_CONV                 500
+#     KAPPA_POST_INFERENCE_MODE              true
+#     MAXIMIZATION_MODE                      true
+#     MIN_NB_ANGLES_TO_TRY                   100
+#     NUMERICAL_CONVERGENCE_THRESHOLD_1      0.01
+#     NUMERICAL_CONVERGENCE_THRESHOLD_2      5e-05
+#     NUMERICAL_CONVERGENCE_THRESHOLD_3      0.5
+#     NUMERICAL_ZERO                         1e-10
+#     QUIET_MODE                             false
+#     REFINE_MODE                            false
+#     ROOTNAME_OUTPUT:                       ../python/data/karate_club
+#     SEED                                   1758033681
+#     VALIDATION_MODE                        false
+#     VERBOSE_MODE                           false
+#     VERSION                                0.9
+# =~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=

@@ -1,0 +1,78 @@
+# =~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=
+# Embedding started at:  2025/09/16 17:27 UTC
+# Ended at:              2025/09/16 17:27 UTC
+# Elapsed CPU time:      1.32793 seconds
+# Edgelist file:         ../python/data/balanced_tree.edge
+#
+# Parameters
+#   - nb. vertices:      31
+#   - beta:              1.00673
+#   - mu:                0.00347483
+#   - radius_S1:         4.9338
+#   - radius_H2:         14.8775
+#   - kappa_min:         1.29223
+# =~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=
+#        Vertex       Inf.Kappa       Inf.Theta    Inf.Hyp.Rad. 
+              0         8.78327          3.2226         11.0445 
+              1         14.4682        0.172343         10.0463 
+              2         16.4326          3.2175         9.79167 
+              3          12.808         6.06578           10.29 
+              4         14.1359        0.242162         10.0928 
+              5         14.9387         2.40081         9.98229 
+              6         16.5954          3.8856         9.77194 
+              7          13.986         5.73361         10.1141 
+              8         12.1385         6.07328         10.3974 
+              9         12.6988        0.351116         10.3072 
+             10         13.1178        0.609679         10.2423 
+             11         15.3337          2.1778         9.93009 
+             12         12.3401         2.45441         10.3645 
+             13         14.3085         4.01537         10.0685 
+             14         14.2046         4.27681         10.0831 
+             15          2.5809         5.72884         13.4939 
+             16         2.82327         5.70216         13.3144 
+             17         2.56505         6.02315         13.5062 
+             18         1.89626         6.09317         14.1104 
+             19         1.65206        0.357997         14.3862 
+             20         2.94781        0.416701         13.2281 
+             21         1.67822        0.609253         14.3547 
+             22         3.28789        0.658536         13.0097 
+             23          3.9982         2.06596         12.6185 
+             24         2.63757         2.18887         13.4505 
+             25         2.86305         2.49277         13.2864 
+             26         1.29223         2.45739         14.8775 
+             27          2.2504         3.99969          13.768 
+             28          3.0028         4.05406         13.1911 
+             29         2.22582         4.26821         13.7899 
+             30         2.33624         4.29071         13.6931 
+#
+# =~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=
+# Internal parameters and options
+#     ALREADY_INFERRED_PARAMETERS_FILENAME   
+#     BETA_ABS_MAX                           25
+#     BETA_ABS_MIN                           1.01
+#     CHARACTERIZATION_MODE                  false
+#     CHARACTERIZATION_NB_GRAPHS             100
+#     CLEAN_RAW_OUTPUT_MODE                  false
+#     CUSTOM_BETA                            false
+#     CUSTOM_INFERRED_COORDINATES            false
+#     CUSTOM_OUTPUT_ROOTNAME_MODE            false
+#     CUSTOM_SEED                            false
+#     EDGELIST_FILENAME:                     ../python/data/balanced_tree.edge
+#     EXP_CLUST_NB_INTEGRATION_MC_STEPS      600
+#     EXP_DIST_NB_INTEGRATION_STEPS          1000
+#     KAPPA_MAX_NB_ITER_CONV                 500
+#     KAPPA_POST_INFERENCE_MODE              true
+#     MAXIMIZATION_MODE                      true
+#     MIN_NB_ANGLES_TO_TRY                   100
+#     NUMERICAL_CONVERGENCE_THRESHOLD_1      0.01
+#     NUMERICAL_CONVERGENCE_THRESHOLD_2      5e-05
+#     NUMERICAL_CONVERGENCE_THRESHOLD_3      0.5
+#     NUMERICAL_ZERO                         1e-10
+#     QUIET_MODE                             false
+#     REFINE_MODE                            false
+#     ROOTNAME_OUTPUT:                       ../python/data/balanced_tree
+#     SEED                                   1758043639
+#     VALIDATION_MODE                        false
+#     VERBOSE_MODE                           false
+#     VERSION                                0.9
+# =~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=~=
