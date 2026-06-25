@@ -660,8 +660,9 @@ def test_dmercator_d1_init_mercator_produces_valid_embedding():
     # The Mercator init must place *every* node (incl. degree-one leaves, which
     # it spaces around their hub) on the disk, with finite coordinates.
     G = nx.balanced_tree(2, 4)
-    emb = DMercatorEmbedder(d=2, n_steps=0, log_every=0, random_state=0)
-    emb.fit(G, d1_init="mercator")
+    emb = DMercatorEmbedder(d=2, n_steps=0, log_every=0, random_state=0,
+                            d1_init="mercator")
+    emb.fit(G)
     X = emb.embeddings()
     assert X.shape == (G.number_of_nodes(), 2)
     assert np.isfinite(X).all()
@@ -673,10 +674,10 @@ def test_dmercator_d1_init_default_is_le_and_mercator_differs():
     G = nx.balanced_tree(2, 4)
     X_default = DMercatorEmbedder(d=2, n_steps=0, log_every=0,
                                   random_state=0).fit(G).embeddings()
-    X_le = DMercatorEmbedder(d=2, n_steps=0, log_every=0,
-                             random_state=0).fit(G, d1_init="le").embeddings()
-    X_merc = DMercatorEmbedder(d=2, n_steps=0, log_every=0,
-                               random_state=0).fit(G, d1_init="mercator").embeddings()
+    X_le = DMercatorEmbedder(d=2, n_steps=0, log_every=0, random_state=0,
+                             d1_init="le").fit(G).embeddings()
+    X_merc = DMercatorEmbedder(d=2, n_steps=0, log_every=0, random_state=0,
+                               d1_init="mercator").fit(G).embeddings()
     np.testing.assert_allclose(X_default, X_le)
     assert not np.allclose(X_default, X_merc)
 
@@ -684,15 +685,16 @@ def test_dmercator_d1_init_default_is_le_and_mercator_differs():
 def test_dmercator_d1_init_mercator_ignored_for_high_d(karate):
     # The Mercator ordering init is D=1-only; for d > 2 it must warn and fall
     # back to LE rather than misbehave.
-    emb = DMercatorEmbedder(d=3, n_steps=0, log_every=0, random_state=0)
+    emb = DMercatorEmbedder(d=3, n_steps=0, log_every=0, random_state=0,
+                            d1_init="mercator")
     with pytest.warns(UserWarning, match="only applies to D=1"):
-        emb.fit(karate, d1_init="mercator")
+        emb.fit(karate)
 
 
-def test_dmercator_d1_init_invalid_raises(small_graph):
-    emb = DMercatorEmbedder(d=2, n_steps=0, log_every=0, random_state=0)
+def test_dmercator_d1_init_invalid_raises():
+    # Invalid strategy is rejected at construction (uniform fit() signature).
     with pytest.raises(ValueError):
-        emb.fit(small_graph, d1_init="bogus")
+        DMercatorEmbedder(d=2, d1_init="bogus")
 
 
 # ── X_init equivalence ────────────────────────────────────────────────────
