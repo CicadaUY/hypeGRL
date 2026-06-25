@@ -53,7 +53,7 @@ from scipy.special import gamma as sp_gamma
 _KAPPA_TOL_CLASS = 0.01    # ε for degree-class κ inference (Stage 1)
 _KAPPA_TOL_FINAL = 0.5     # NUMERICAL_CONVERGENCE_THRESHOLD_3 (Stage 4)
 _KAPPA_MAX_ITER = 500      # KAPPA_MAX_NB_ITER_CONV
-_CLUSTERING_TOL = 0.01     # ε_c̄ on |c̄ - c̄_emp|
+_CLUSTERING_TOL = 0.05     # ε_c̄ on |c̄ - c̄_emp| (matches the C++ break tol)
 _CLUSTERING_MC = 600       # MC samples per degree class
 _BETA_MAX_BISECT = 40      # cap on bisection iterations
 _N_INT = 200               # trapezoid resolution over θ ∈ [0, π]
@@ -304,46 +304,64 @@ def infer_kappa_and_beta(
     neighbor_p = degree_values * counts
     neighbor_p = neighbor_p / neighbor_p.sum()
 
-    # initial guess β ∈ (D, D+1); quality is independent of it
-    beta = float(rng.uniform(D, D + 1))
-    mu = compute_mu(beta, D, avg_deg)
-    kappa = _infer_kappa(degree_values, counts, beta, mu, R, D, theta, rng)
-    cbar = _expected_clustering(
-        degree_values, kappa, counts, neighbor_p, beta, mu, R, D, rng, theta
-    )
+    # β is chosen so the model's expected clustering matches the empirical c̄,
+    # via the bidirectional bracket-bisection of the reference C++
+    # (`infer_kappas_beta_for_all_vertices`): grow β by ×1.5 while the model
+    # *under*-clusters (until an upper bracket exists, then bisect), and shrink β
+    # toward the lower bound β = D while it *over*-clusters. Low-clustering graphs
+    # — trees especially, where c̄_emp = 0 — drive β down to the floor, which the
+    # reference clamps with a warning since the S^D model cannot reach zero
+    # clustering at finite β.
+    #
+    # (The earlier one-directional "grow β only" bracket assumed the initial β
+    # always under-clustered; on a tree the initial β over-clusters, so the
+    # `while cbar < c_emp` bracket never fired, β stayed pinned at its random
+    # initial value, and μ, R̂ and the whole radial scale came out wrong.)
+    beta_floor = D + 0.01           # BETA_ABS_MIN_DIM
+    beta_ceil = D + 100.0           # BETA_ABS_MAX_DIM
+    beta_min = float(D)             # β must strictly exceed the dimension
+    beta_max = -1.0                 # sentinel: no upper bracket established yet
 
-    # bracket: grow β by ×1.5 until model clustering exceeds the empirical
-    beta_lo = beta
-    n_grow = 0
-    while cbar < c_emp and n_grow < _BETA_MAX_BISECT:
-        beta_lo = beta
-        beta = 1.5 * beta
-        mu = compute_mu(beta, D, avg_deg)
-        kappa = _infer_kappa(degree_values, counts, beta, mu, R, D, theta, rng)
-        cbar = _expected_clustering(
-            degree_values, kappa, counts, neighbor_p, beta, mu, R, D, rng, theta
+    def _eval(b: float) -> tuple[np.ndarray, float]:
+        m = compute_mu(b, D, avg_deg)
+        k = _infer_kappa(degree_values, counts, b, m, R, D, theta, rng)
+        c = _expected_clustering(
+            degree_values, k, counts, neighbor_p, b, m, R, D, rng, theta
         )
-        n_grow += 1
         if verbose:
-            print(f"  [β bracket] β={beta:.4f}  c̄={cbar:.4f}  (target {c_emp:.4f})")
-    beta_hi = beta
+            print(f"  [β infer]  β={b:.4f}  c̄={c:.4f}  (target {c_emp:.4f})")
+        return k, c
 
-    # bisection on β ∈ [β_lo, β_hi]
+    beta = float(rng.uniform(D, D + 1))     # initial guess
+    kappa, cbar = _eval(beta)
+
     for _ in range(_BETA_MAX_BISECT):
         if abs(cbar - c_emp) < _CLUSTERING_TOL:
             break
-        beta = 0.5 * (beta_lo + beta_hi)
-        mu = compute_mu(beta, D, avg_deg)
-        kappa = _infer_kappa(degree_values, counts, beta, mu, R, D, theta, rng)
-        cbar = _expected_clustering(
-            degree_values, kappa, counts, neighbor_p, beta, mu, R, D, rng, theta
-        )
-        if cbar < c_emp:
-            beta_lo = beta
+        if cbar > c_emp:
+            # over-clustered → push β toward the lower bound
+            beta_max = beta
+            beta = 0.5 * (beta_max + beta_min)
+            clamped = beta < beta_floor
         else:
-            beta_hi = beta
-        if verbose:
-            print(f"  [β bisect]  β={beta:.4f}  c̄={cbar:.4f}  (target {c_emp:.4f})")
+            # under-clustered → push β up (×1.5 until an upper bracket exists)
+            beta_min = beta
+            beta = beta * 1.5 if beta_max < 0.0 else 0.5 * (beta_max + beta_min)
+            clamped = beta > beta_ceil
+        # κ and c̄ are recomputed at the *new* β, so the returned pair stays
+        # self-consistent even when we clamp — unlike the reference, which
+        # reports the clamped β alongside κ/μ from the previous iterate (the
+        # origin of the μ "penultimate-β" mismatch documented in
+        # tests/test_dmercator_cpp_equivalence.py).
+        kappa, cbar = _eval(beta)
+        if clamped:
+            warnings.warn(
+                f"β driven to its bound ({beta:.4f}) while matching clustering "
+                f"(target c̄={c_emp:.4f}, model c̄={cbar:.4f}): the S^{D} model "
+                "cannot reach this clustering at finite β. Using the bound.",
+                stacklevel=2,
+            )
+            break
 
     return kappa, beta
 
