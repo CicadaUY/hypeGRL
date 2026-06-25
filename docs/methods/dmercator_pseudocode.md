@@ -235,9 +235,13 @@ eigenproblem whose target distances come from the model.
 > only to get an angular *ordering* of the core nodes (`atan2` of 2 eigenvectors), inserts each hub's
 > degree-one neighbours around it, then re-spaces every node around the circle by its expected angular
 > gap to its predecessor (`∫ da·w/∫w`, `w = e^{−da/avg_gap}·[p or 1−p]`), rescaling the span to 2π.
-> The init module uses LE for all D by default (the paper's generalisation); pass
-> ``d1_init="mercator"`` (to `dmercator_init` / `DMercatorEmbedder.fit`) to reproduce the C++ D=1
-> behaviour instead (`mercator_ordering_init`).
+> The init module uses LE for all D by default (the paper's generalisation); construct
+> ``DMercatorEmbedder(d1_init="mercator")`` (or call `dmercator_init(..., d1_init="mercator")`) to
+> reproduce the C++ D=1 behaviour instead (`mercator_ordering_init`). On leaf-heavy graphs the
+> Mercator init spaces degree-one nodes around their hub deterministically (LE reinserts each leaf at
+> a random angle, and MLE never moves leaves): on `balanced_tree(2,4)`/`(2,5)` over 8 seeds it gives a
+> ~6–10× larger minimum inter-leaf angle and comparable-to-better reconstruction (AUC 0.83 vs 0.77 on
+> `(2,4)`, ~tied on `(2,5)`).
 
 ```
 function MODEL_CORRECTED_LE(A, κ, β, μ, R, D):
