@@ -71,7 +71,7 @@ This means that for :math:`n=2` the distance between two points is
    \sinh r_u \sinh r_v \cos(\theta_{u,v})
    \right).
 
-with :math:`\theta_{u,v}` being the anglular separation between :math:`\mathbf{u}` and :math:`\mathbf{v}`. For large radii, this distance admits the asymptotic approximation
+with :math:`\theta_{u,v}` being the angular separation between :math:`\mathbf{u}` and :math:`\mathbf{v}`. For large radii, this distance admits the asymptotic approximation
 
 .. math::
 
@@ -98,4 +98,9 @@ with the mapping from Lorentz coordinates :math:`(\mathbf{x},t)` given by :math:
 
    Transforming between hyperboloid and Poincaré models.
    
-The Poincaré model is conformal, meaning that angles are preserved, and geodesics appear as circular arcs orthogonal to the boundary of the unit ball. Although distances become increasingly distorted near the boundary, this representation is particularly useful for geometric intuition and visualization.
+The Poincaré model is conformal, meaning that angles are preserved, and geodesics appear as circular arcs orthogonal to the boundary of the unit ball. The distance between two points in this model is
+
+.. math::
+    d_P (\mathbf{y}_1,\mathbf{y}_2) =  \operatorname{arcosh}\!\left(1+\frac{2\|\mathbf{y}_1-\mathbf{y}_2\|^2}{(1-\|\mathbf{y}_1\|^2)(1-\|\mathbf{y}_2\|^2)}\right). 
+
+Although distances become increasingly distorted near the boundary, this representation is particularly useful for geometric intuition and visualization.
