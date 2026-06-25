@@ -1,4 +1,4 @@
-# hypeGRL: Hyperbolic Graph Represenatation Learning
+# hypeGRL: Hyperbolic Graph Representation Learning
 
 Graph Representation Learning in hyperbolic (and Euclidean) spaces,
 with principled support for unknown edges and streaming graph updates.
@@ -7,7 +7,7 @@ with principled support for unknown edges and streaming graph updates.
 
 `hypeGRL` provides a unified framework for embedding graphs into
 low-dimensional spaces — mostly hyperbolic but also some Euclidean — through the
-encoder-decoder formalism. In addition to constituing a unified framework for several (previously dispersed) embedding methods, a key contribution of `hypeGRL`is the treatment of
+encoder-decoder formalism. In addition to constituting a unified framework for several (previously dispersed) embedding methods, a key contribution of `hypeGRL`is the treatment of
 **partially observed graphs**: rather than imputing unknown edges with
 zeros (which introduces bias), the framework jointly optimizes node
 embeddings and unknown adjacency entries, enforcing that the learned
