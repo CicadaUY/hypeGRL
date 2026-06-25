@@ -187,6 +187,7 @@ class DMercatorEmbedder(HyperbolicEmbedder):
         G: nx.Graph,
         unknown_edges: Optional[list[tuple[int, int]]] = None,
         X_init: Optional[np.ndarray] = None,
+        d1_init: str = "le",
     ) -> "DMercatorEmbedder":
         """
         Fit D-Mercator embeddings from a graph.
@@ -203,6 +204,18 @@ class DMercatorEmbedder(HyperbolicEmbedder):
             warm start (the init still runs when the model parameters β, R̂ have
             not yet been inferred). If ``None``, the full original D-Mercator
             pipeline provides the warm start.
+        d1_init:
+            Angular initialisation strategy, only effective when ``d == 2``
+            (similarity dimension ``D == 1``):
+
+            - ``"le"`` (default): the paper's Laplacian-Eigenmaps init.
+            - ``"mercator"``: the classic Mercator ordering + expected-gap
+              re-spacing that the reference C++ uses for D=1. Provided to
+              compare the two initialisations; ignored (with a warning) for
+              ``d > 2``.
+
+            Only affects the warm start, so it is inert when ``X_init`` is given
+            and the parameters are already cached.
         """
         if unknown_edges:
             warnings.warn(
@@ -224,6 +237,7 @@ class DMercatorEmbedder(HyperbolicEmbedder):
                 D=D,
                 beta=self.beta,
                 random_state=self.random_state,
+                d1_init=d1_init,
                 verbose=self.log_every > 0,
             )
             self._beta_fitted = res["beta"]

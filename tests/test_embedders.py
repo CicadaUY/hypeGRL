@@ -650,6 +650,51 @@ def test_dmercator_unknown_edges_warns(small_graph):
         emb.fit(small_graph, unknown_edges=[(0, 4)])
 
 
+# ── d1_init: LE (paper, default) vs Mercator ordering+gap re-spacing ──────────
+# At D=1 (d=2) the reference C++ does NOT use Laplacian Eigenmaps; it uses the
+# classic Mercator ordering + expected-angular-gap re-spacing. We default to the
+# paper's LE for all D and expose ``d1_init="mercator"`` to reproduce/compare the
+# C++ D=1 init. These tests pin that the flag is wired correctly.
+
+def test_dmercator_d1_init_mercator_produces_valid_embedding():
+    # The Mercator init must place *every* node (incl. degree-one leaves, which
+    # it spaces around their hub) on the disk, with finite coordinates.
+    G = nx.balanced_tree(2, 4)
+    emb = DMercatorEmbedder(d=2, n_steps=0, log_every=0, random_state=0)
+    emb.fit(G, d1_init="mercator")
+    X = emb.embeddings()
+    assert X.shape == (G.number_of_nodes(), 2)
+    assert np.isfinite(X).all()
+    assert (np.linalg.norm(X, axis=1) < 1.0).all()
+
+
+def test_dmercator_d1_init_default_is_le_and_mercator_differs():
+    # Default == explicit "le"; "mercator" is a genuinely different init.
+    G = nx.balanced_tree(2, 4)
+    X_default = DMercatorEmbedder(d=2, n_steps=0, log_every=0,
+                                  random_state=0).fit(G).embeddings()
+    X_le = DMercatorEmbedder(d=2, n_steps=0, log_every=0,
+                             random_state=0).fit(G, d1_init="le").embeddings()
+    X_merc = DMercatorEmbedder(d=2, n_steps=0, log_every=0,
+                               random_state=0).fit(G, d1_init="mercator").embeddings()
+    np.testing.assert_allclose(X_default, X_le)
+    assert not np.allclose(X_default, X_merc)
+
+
+def test_dmercator_d1_init_mercator_ignored_for_high_d(karate):
+    # The Mercator ordering init is D=1-only; for d > 2 it must warn and fall
+    # back to LE rather than misbehave.
+    emb = DMercatorEmbedder(d=3, n_steps=0, log_every=0, random_state=0)
+    with pytest.warns(UserWarning, match="only applies to D=1"):
+        emb.fit(karate, d1_init="mercator")
+
+
+def test_dmercator_d1_init_invalid_raises(small_graph):
+    emb = DMercatorEmbedder(d=2, n_steps=0, log_every=0, random_state=0)
+    with pytest.raises(ValueError):
+        emb.fit(small_graph, d1_init="bogus")
+
+
 # ── X_init equivalence ────────────────────────────────────────────────────
 # For each gradient-based method: fitting with default init and n_steps=T
 # must give the same result as (1) capturing the default init via n_steps=0,

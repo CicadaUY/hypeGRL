@@ -53,10 +53,11 @@ from scipy.special import gamma as sp_gamma
 _KAPPA_TOL_CLASS = 0.01    # ε for degree-class κ inference (Stage 1)
 _KAPPA_TOL_FINAL = 0.5     # NUMERICAL_CONVERGENCE_THRESHOLD_3 (Stage 4)
 _KAPPA_MAX_ITER = 500      # KAPPA_MAX_NB_ITER_CONV
-_CLUSTERING_TOL = 0.05     # ε_c̄ on |c̄ - c̄_emp| (matches the C++ break tol)
+_CLUSTERING_TOL = 0.01     # ε_c̄ on |c̄ - c̄_emp| (NUMERICAL_CONVERGENCE_THRESHOLD_1)
 _CLUSTERING_MC = 600       # MC samples per degree class
 _BETA_MAX_BISECT = 40      # cap on bisection iterations
 _N_INT = 200               # trapezoid resolution over θ ∈ [0, π]
+_EXP_DIST_NB_INT = 1000    # EXP_DIST_NB_INTEGRATION_STEPS (Mercator D=1 gap spacing)
 _TINY = 1e-12
 
 
@@ -647,6 +648,161 @@ def _place_at_angular_separation(
     return np.cos(dtheta) * v_ref + np.sin(dtheta) * t
 
 
+def _reinsert_degree_one(
+    V: np.ndarray,
+    A: np.ndarray,
+    kappa: np.ndarray,
+    beta: float,
+    mu: float,
+    R: float,
+    D: int,
+    theta: np.ndarray,
+    rng: np.random.Generator,
+    core_mask: np.ndarray,
+) -> None:
+    """Place each degree-one (and any unplaced) node, in-place, at a sampled
+    angular separation from its neighbour (§2.5). Used by the LE Stage-2 path."""
+    for i in np.where(~core_mask)[0]:
+        nbr = np.where(A[i] > 0)[0]
+        if len(nbr) == 0:
+            V[i] = _random_unit_vectors(D + 1, 1, rng)[0]
+            continue
+        j = int(nbr[0])
+        if np.any(np.isnan(V[j])):
+            V[j] = _random_unit_vectors(D + 1, 1, rng)[0]
+        dth = _sample_angle_given_connected(
+            kappa[i], np.array([kappa[j]]), beta, mu, R, D, rng, theta
+        )[0]
+        V[i] = _place_at_angular_separation(V[j], dth, rng)
+
+
+# ---------------------------------------------------------------------------
+# Stage 2 (D=1 only) — classic Mercator ordering + expected-gap re-spacing
+# ---------------------------------------------------------------------------
+# The reference C++ does NOT use Laplacian Eigenmaps for D=1: `embed()` routes
+# `DIMENSION == 1` to `infer_initial_positions()` (no `dim`), which uses LE only
+# to obtain an angular *ordering* of the core nodes, then re-spaces every node
+# around the circle by its expected angular gap to its predecessor in that order
+# (`embeddingSD.hpp` find_initial_ordering(ordering,…) + infer_initial_positions()).
+# This is the original Mercator initialisation. Our default Stage 2 uses LE for
+# all D (the paper's generalisation); this routine reproduces the D=1 behaviour
+# for comparison (selected via ``d1_init="mercator"``).
+
+def _circular_distance(a: float, b: float) -> float:
+    """Angular distance on the circle, mapped to [0, π]."""
+    d = abs(a - b) % (2.0 * np.pi)
+    return min(d, 2.0 * np.pi - d)
+
+
+def _expected_angular_gap(
+    kappa_u: float, kappa_v: float, connected: bool,
+    beta: float, mu: float, R: float, N: int,
+) -> float:
+    """
+    Expected angular gap between two consecutive ordered nodes (Mercator's
+    ``infer_initial_positions``):
+
+        ⟨gap⟩ = ∫_0^π da·w(da) / ∫_0^π w(da),
+        w(da) = exp(−da/avg_gap) / (1 + χ(da)^{±β}),  χ = R·da/(μ κ_u κ_v),
+
+    with ``+β`` if the two nodes are connected and ``−β`` otherwise (so the
+    weight is the connection probability for edges, and one minus it for
+    non-edges), and ``avg_gap = 2π/N`` a geometric prior favouring small gaps.
+    """
+    prefactor = N / (2.0 * np.pi * mu)             # = R/μ for D=1 (R = N/2π)
+    avg_gap = 2.0 * np.pi / N
+    factor = prefactor / (kappa_u * kappa_v)
+    b = beta if connected else -beta
+    da = np.linspace(0.0, np.pi, _EXP_DIST_NB_INT + 1)
+    chi = factor * da
+    with np.errstate(divide="ignore", invalid="ignore"):
+        w = np.exp(-da / avg_gap) / (1.0 + chi ** b)
+    # da = 0 limit: χ = 0 ⇒ χ^{+β} = 0 (w = 1, connected) or χ^{−β} = ∞ (w = 0).
+    w[0] = 1.0 if connected else 0.0
+    den = np.trapz(w, da)
+    return float(np.trapz(da * w, da) / den) if den > _TINY else 0.0
+
+
+def mercator_ordering_init(
+    A: np.ndarray,
+    kappa: np.ndarray,
+    beta: float,
+    mu: float,
+    R: float,
+    theta_grid: np.ndarray,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """
+    Classic Mercator (D=1) angular initialisation; returns ``(N, 2)`` unit
+    vectors for *all* nodes (degree-one nodes included, placed around their hub).
+
+    Mirrors the reference C++ D=1 path: (1) LE on the degree>1 core gives each
+    core node an angle ``atan2(u_0, u_1)``; sort by it; insert each hub's
+    degree-one neighbours immediately around it (half before, half after,
+    inheriting the hub's angle). (2) Walk that order and re-space every node by
+    ``max(⟨expected gap⟩, raw LE-angle gap)`` to its predecessor, then rescale
+    the accumulated span to 2π. Degree-one siblings of a hub are non-adjacent, so
+    their (non-edge) expected gap spreads them around the hub.
+    """
+    N = A.shape[0]
+    degrees = A.sum(axis=1)
+    core_idx = np.where(degrees >= 2)[0]
+
+    raw_theta = np.zeros(N)
+    if len(core_idx) >= 3:                          # D + 2 = 3 eigenvectors for D=1
+        A_core = A[np.ix_(core_idx, core_idx)]
+        V_core = model_corrected_le(A_core, kappa[core_idx], beta, mu, R, 1,
+                                    theta_grid, rng)
+        core_angle = np.arctan2(V_core[:, 0], V_core[:, 1]) + np.pi
+        raw_theta[core_idx] = core_angle
+        core_order = core_idx[np.argsort(core_angle)]
+    else:
+        core_order = core_idx
+        raw_theta[core_idx] = rng.uniform(0.0, 2.0 * np.pi, size=len(core_idx))
+
+    # Build the full ordering, inserting degree-one neighbours around each hub.
+    ordering: list[int] = []
+    placed = np.zeros(N, dtype=bool)
+    for v in core_order:
+        v = int(v)
+        leaves = [int(u) for u in np.where(A[v] > 0)[0]
+                  if degrees[u] < 2 and not placed[u]]
+        half = len(leaves) // 2
+        for u in leaves[:half]:
+            ordering.append(u)
+            raw_theta[u] = raw_theta[v]
+            placed[u] = True
+        ordering.append(v)
+        placed[v] = True
+        for u in leaves[half:]:
+            ordering.append(u)
+            raw_theta[u] = raw_theta[v]
+            placed[u] = True
+    # Append anything not yet placed (e.g. a degree-one node whose only neighbour
+    # is itself degree-one); keeps the routine total on disconnected inputs.
+    for u in range(N):
+        if not placed[u]:
+            ordering.append(u)
+
+    # Re-space nodes around the circle by cumulative expected gaps.
+    theta = np.zeros(N)
+    norm = 0.0
+    v0 = ordering[-1]                               # periodic wrap-around
+    for v1 in ordering:
+        connected = A[v0, v1] > 0
+        eg = _expected_angular_gap(
+            float(kappa[v0]), float(kappa[v1]), connected, beta, mu, R, N)
+        rg = _circular_distance(raw_theta[v1], raw_theta[v0])
+        norm += max(eg, rg)
+        theta[v1] = norm
+        v0 = v1
+    if norm > _TINY:
+        theta *= 2.0 * np.pi / norm                 # rescale total span to 2π
+    theta[ordering[-1]] = 0.0
+
+    return np.column_stack([np.cos(theta), np.sin(theta)])
+
+
 # ---------------------------------------------------------------------------
 # Top-level driver
 # ---------------------------------------------------------------------------
@@ -658,6 +814,7 @@ def dmercator_init(
     random_state: Optional[int] = None,
     n_int: int = _N_INT,
     mle_max_sweeps: int = 10,
+    d1_init: str = "le",
     verbose: bool = False,
 ) -> dict:
     """
@@ -679,6 +836,14 @@ def dmercator_init(
         Trapezoid resolution for the angular integrals.
     mle_max_sweeps:
         Maximum likelihood-maximization sweeps (Stage 3).
+    d1_init:
+        Stage-2 initialisation, only effective when ``D == 1``:
+
+        - ``"le"`` (default): the paper's Laplacian-Eigenmaps init, used for
+          all D.
+        - ``"mercator"``: the classic Mercator ordering + expected-gap
+          re-spacing that the reference C++ uses for D=1 (see
+          :func:`mercator_ordering_init`). Ignored (with a warning) for D > 1.
     verbose:
         Print β-inference progress.
 
@@ -725,12 +890,31 @@ def dmercator_init(
     mu = compute_mu(beta, D, avg_deg)
     kappa = kappa_classes[inverse]                              # per node
 
+    if d1_init not in ("le", "mercator"):
+        raise ValueError(f"d1_init must be 'le' or 'mercator'; got {d1_init!r}.")
+    use_mercator = d1_init == "mercator"
+    if use_mercator and D != 1:
+        warnings.warn(
+            f"d1_init='mercator' only applies to D=1 (d=2); D={D}, using LE.",
+            UserWarning, stacklevel=2)
+        use_mercator = False
+
     # ── Drop degree-one nodes for Stages 2–3 (§2.5) ──────────────────────
     core_mask = degrees >= 2
     core_idx = np.where(core_mask)[0]
     V = np.full((N, D + 1), np.nan)
 
-    if len(core_idx) >= D + 2:
+    if use_mercator:
+        # ── Stage 2 (Mercator D=1): ordering + expected-gap re-spacing ────
+        # Places *all* nodes (degree-one around their hubs); Stage 3 then
+        # refines only the core, leaving the gap-spaced leaves in place.
+        V = mercator_ordering_init(A, kappa, beta, mu, R, theta, rng)
+        if len(core_idx) >= D + 2:
+            A_core = A[np.ix_(core_idx, core_idx)]
+            V_core = mle_refine(A_core, kappa[core_idx], beta, mu, R, D,
+                                V[core_idx], rng, max_sweeps=mle_max_sweeps)
+            V[core_idx] = V_core
+    elif len(core_idx) >= D + 2:
         A_core = A[np.ix_(core_idx, core_idx)]
         kappa_core = kappa[core_idx]
         # ── Stage 2: S^D-corrected Laplacian Eigenmaps ───────────────────
@@ -739,23 +923,11 @@ def dmercator_init(
         V_core = mle_refine(A_core, kappa_core, beta, mu, R, D, V_core, rng,
                             max_sweeps=mle_max_sweeps)
         V[core_idx] = V_core
+        _reinsert_degree_one(V, A, kappa, beta, mu, R, D, theta, rng, core_mask)
     else:
         # too few core nodes for a meaningful eigenproblem
         V[core_idx] = _random_unit_vectors(D + 1, len(core_idx), rng)
-
-    # ── Reinsert degree-one (and any unplaced) nodes (§2.5) ──────────────
-    for i in np.where(~core_mask)[0]:
-        nbr = np.where(A[i] > 0)[0]
-        if len(nbr) == 0:
-            V[i] = _random_unit_vectors(D + 1, 1, rng)[0]
-            continue
-        j = int(nbr[0])
-        if np.any(np.isnan(V[j])):
-            V[j] = _random_unit_vectors(D + 1, 1, rng)[0]
-        dth = _sample_angle_given_connected(
-            kappa[i], np.array([kappa[j]]), beta, mu, R, D, rng, theta
-        )[0]
-        V[i] = _place_at_angular_separation(V[j], dth, rng)
+        _reinsert_degree_one(V, A, kappa, beta, mu, R, D, theta, rng, core_mask)
 
     # ── Stage 4: final κ readjustment with actual positions ──────────────
     kappa = final_adjust_kappa(A, kappa, beta, mu, R, D, V, rng)

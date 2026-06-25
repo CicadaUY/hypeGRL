@@ -93,9 +93,20 @@ where it is clamped with a warning.
 > floor/clamp, and an unbounded `repeat … until`. That spec silently fails whenever the initial
 > β already over-clusters (e.g. any tree, where `c̄_emp = 0`): the bracket never fires, `β_lo = β_hi`,
 > the bisection is degenerate, and β stays pinned at its random initial value — corrupting μ, R̂ and
-> the whole radial scale. The version below mirrors the reference C++
-> (`embeddingSD.hpp::infer_kappas_beta_for_all_vertices(dim)`, lines 2028–2099) and is what the init
-> module implements.
+> the whole radial scale. The version below mirrors the reference C++ Stage-1 routine
+> `embeddingSD.hpp::infer_parameters(int dim)` (lines 2390–2504) — and its D=1 specialization
+> `infer_parameters()` (lines 2508+), which `embed()` dispatches to when `DIMENSION == 1`. (Do **not**
+> confuse it with `infer_kappas_beta_for_all_vertices`, lines 2028+: that is an *optional* post-step,
+> gated by `KAPPA_BETA_POST_INFERENCE_MODE`, that re-tunes β/κ from a *simulated* network with a `0.05`
+> tolerance — not the Stage-1 inference.) The clustering break tolerance is
+> `NUMERICAL_CONVERGENCE_THRESHOLD_1 = 0.01`.
+>
+> Two C++ quirks at the floor worth knowing: (i) the D≥2 path sets `β = D + 0.01` and **re-infers κ**
+> there (self-consistent), while the D=1 path keeps the sub-floor midpoint β and does **not** re-infer
+> — so it reports that β alongside κ/μ from the previous iterate (the origin of the μ "penultimate-β"
+> mismatch documented in the equivalence tests). (ii) The D=1 initial guess is `β = 2 + uniform(0,1)`,
+> not `uniform(D, D+1)`. The init module follows the self-consistent variant (recompute κ at the final
+> β); the initial β is immaterial since the bidirectional search converges from either side.
 
 ### 2.1 Outer loop on β (IV B 2)
 
@@ -116,7 +127,7 @@ function INFER_KAPPA_AND_BETA(A, k, ⟨k⟩, c̄_emp, R, D):
     (κ, c̄)  = EVAL(β)
 
     repeat at most N_MAX times:                         # N_MAX guards an unreachable target
-        if |c̄ - c̄_emp| < ε_c̄:  break                  # ε_c̄ = 0.05  (matches the C++ break tol)
+        if |c̄ - c̄_emp| < ε_c̄:  break                  # ε_c̄ = 0.01  (NUMERICAL_CONVERGENCE_THRESHOLD_1)
 
         if c̄ > c̄_emp:                                  # over-clustered ⇒ lower β toward the floor
             β_max   = β
@@ -217,6 +228,16 @@ angular separation from j (uniform azimuth).
 
 Goal: a good initial guess for the angular positions by solving a weighted-Laplacian
 eigenproblem whose target distances come from the model.
+
+> **D=1 caveat (C++ divergence).** This LE init is what the reference C++ uses for **D ≥ 2**
+> (`find_initial_ordering(positions, dim)`). For **D = 1** the C++ does *not* embed via LE: `embed()`
+> routes `DIMENSION == 1` to `infer_initial_positions()`, the classic **Mercator** init — it uses LE
+> only to get an angular *ordering* of the core nodes (`atan2` of 2 eigenvectors), inserts each hub's
+> degree-one neighbours around it, then re-spaces every node around the circle by its expected angular
+> gap to its predecessor (`∫ da·w/∫w`, `w = e^{−da/avg_gap}·[p or 1−p]`), rescaling the span to 2π.
+> The init module uses LE for all D by default (the paper's generalisation); pass
+> ``d1_init="mercator"`` (to `dmercator_init` / `DMercatorEmbedder.fit`) to reproduce the C++ D=1
+> behaviour instead (`mercator_ordering_init`).
 
 ```
 function MODEL_CORRECTED_LE(A, κ, β, μ, R, D):
