@@ -1,7 +1,8 @@
 # hypeGRL: Hyperbolic Graph Representation Learning
 
 Graph Representation Learning in hyperbolic (and Euclidean) spaces,
-with principled support for unknown edges and streaming graph updates.
+with principled support for unknown (partially observed) edges, and
+planned support for streaming graph updates.
 
 ## Overview
 
@@ -13,18 +14,24 @@ zeros (which introduces bias), the framework jointly optimizes node
 embeddings and unknown adjacency entries, enforcing that the learned
 representations are insensitive to the unobserved edges.
 
-## Embedding methods 
+## Embedding methods
 
-This is a work-in-progress, but the objective is to have these methods:
+`hypeGRL` is a work in progress. Implemented methods (✅) and planned ones:
 
-| Method | Geometry | Gradient-based | Generative | Edge updates | Node updates |
-|---|---|---|---|---|---|
-| ASE / RDPG | Euclidean | Yes | Yes | Yes | Out-of-sample |
-| Poincaré Maps | Poincaré disk | Yes | Partial | Yes | Out-of-sample |
-| Poincaré Embeddings | Poincaré disk | Yes | Yes | Yes | Out-of-sample |
-| Lorentz Embeddings | Hyperboloid | Yes | Yes | Yes | Out-of-sample |
-| Hydra+ | Hyperboloid | No | No | Full refit | Full refit |
-| d-Mercator | Spherical | Yes | Yes | Full refit | Full refit |
+| Method | Geometry | Gradient-based | Generative | Unknown edges | Updates | Status |
+|---|---|---|---|---|---|---|
+| Poincaré Maps | Poincaré disk | Yes | No | Yes | warm-start refit | ✅ |
+| Poincaré Embeddings | Poincaré ball | Yes | FD loss only | Yes | warm-start refit | ✅ |
+| HyperMap | Poincaré ball | Yes | Yes | Yes | warm-start refit | ✅ |
+| Hydra | Poincaré disk | No (closed-form) | No | No (zero-impute) | refit | ✅ |
+| Hydra+ | Poincaré disk | Yes | No | No (zero-impute) | refit | ✅ |
+| d-Mercator | S^D + Poincaré ball | Yes | Yes | Planned | refit | ✅ |
+| ASE / RDPG | Euclidean | Yes | Yes | — | — | Planned |
+| Lorentz | Hyperboloid | Yes | Yes | — | — | Planned |
+
+*Updates*: methods currently re-fit on graph changes (warm-started where
+gradient-based). True incremental updates — Woodbury forest-matrix updates and
+out-of-sample node extension — are planned.
 
 
 ## Installation
@@ -62,6 +69,19 @@ X = embedder.embeddings()
 print(X.shape)  # (34, 2)
 ```
 
+Or, for example, Poincaré Embeddings (Nickel & Kiela) with the ranking loss
+and negative sampling:
+
+```python
+from hypegrl.embedders.poincare_embeddings import PoincareEmbeddingsEmbedder
+
+embedder = PoincareEmbeddingsEmbedder(d=2, n_steps=300)  # loss="ranking" by default
+embedder.fit(G)
+
+X = embedder.embeddings()
+print(X.shape)  # (34, 2)
+```
+
 ## Documentation
 
 Full documentation at [hypegrl.readthedocs.io](https://hypegrl.readthedocs.io).
@@ -71,6 +91,9 @@ Full documentation at [hypegrl.readthedocs.io](https://hypegrl.readthedocs.io).
 - Klimovskaia et al., *Poincaré Maps for Analyzing Complex Hierarchies*, Nature Communications 2020.
 - Nickel & Kiela, *Poincaré Embeddings for Learning Hierarchical Representations*, NeurIPS 2017.
 - Nickel & Kiela, *Learning Continuous Hierarchies in the Lorentz Model*, ICML 2018.
+- Papadopoulos, Aldecoa & Krioukov, *Network Geometry Inference using Common Neighbors* (HyperMap), Physical Review E 2015.
 - Keller et al., *Hydra: A Method for Strain-Minimizing Hyperbolic Embedding*, J. Complex Networks 2021.
+- García-Pérez et al., *Mercator: uncovering faithful hyperbolic embeddings of complex networks*, New J. Phys. 2019.
+- Jankowski, Allard, Boguñá & Serrano, *The D-Mercator method for the multidimensional hyperbolic embedding of real networks*, Nature Communications 2023.
 - Scheinerman & Tucker, *Modeling Graphs Using Dot Product Representations*, Computational Statistics 2010.
 - Fiori et al., *Gradient-Based Spectral Embeddings of Random Dot Product Graphs*, IEEE TSIPN 2024.
