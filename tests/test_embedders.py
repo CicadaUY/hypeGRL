@@ -15,6 +15,14 @@ from hypegrl.inference.joint_optimizer import (
     logit_init,
     graph_to_tensor,
 )
+from hypegrl.embedders.poincare_embeddings import (
+    PoincareEmbeddingsEmbedder,
+    poincare_distance_matrix,
+    sample_negatives,
+    ranking_nll,
+    fermi_dirac_decoder,
+    fermi_dirac_nll,
+)
 from hypegrl.embedders.hydra import HydraEmbedder
 from hypegrl.embedders.hydra_plus import HydraPlusEmbedder
 from hypegrl.embedders.hypermap import HyperMapEmbedder
@@ -808,3 +816,188 @@ def test_dmercator_x_init_equivalent_to_default(karate):
     # mildly amplifies that ~1e-16 difference over the refinement — hence
     # assert_allclose rather than assert_array_equal.
     np.testing.assert_allclose(X_full, X_explicit, atol=1e-6)
+
+
+# ── PoincareEmbeddingsEmbedder ─────────────────────────────────────────────
+
+def test_pe_distance_matrix_symmetric_zero_diag():
+    X = torch.randn(6, 2, dtype=torch.float64) * 0.2
+    D = poincare_distance_matrix(X)
+    assert D.shape == (6, 6)
+    assert torch.allclose(D, D.T, atol=1e-10)
+    assert torch.allclose(torch.diag(D), torch.zeros(6, dtype=torch.float64),
+                          atol=1e-7)
+
+
+def test_pe_sample_negatives_avoids_self_and_neighbours():
+    # Node 0 is connected to 1 and 2; its only non-neighbour is 3.
+    A = torch.tensor(
+        [[0, 1, 1, 0],
+         [1, 0, 0, 0],
+         [1, 0, 0, 0],
+         [0, 0, 0, 0]], dtype=torch.float64
+    )
+    neg = sample_negatives(A, n_negatives=20)
+    assert neg.shape == (4, 20)
+    # Every sampled negative for node 0 must be node 3 (the only candidate).
+    assert (neg[0] == 3).all()
+    # No node ever samples itself.
+    rows = torch.arange(4).unsqueeze(1)
+    assert not (neg == rows).any()
+
+
+def test_pe_sample_negatives_fully_connected_node_falls_back():
+    # Node 0 is connected to everyone -> no non-edge; must still sample (not 0).
+    A = torch.tensor(
+        [[0, 1, 1, 1],
+         [1, 0, 0, 0],
+         [1, 0, 0, 0],
+         [1, 0, 0, 0]], dtype=torch.float64
+    )
+    neg = sample_negatives(A, n_negatives=10)
+    assert (neg[0] != 0).all()
+
+
+def test_pe_ranking_nll_scalar_and_finite(small_graph):
+    A = torch.tensor(nx.to_numpy_array(small_graph), dtype=torch.float64)
+    X = torch.randn(5, 2, dtype=torch.float64) * 0.1
+    loss = ranking_nll(X, A, n_negatives=3)
+    assert loss.shape == ()
+    assert torch.isfinite(loss)
+    assert loss.item() >= 0.0
+
+
+def test_pe_ranking_nll_grad_flows_to_unknown_weights(small_graph):
+    # An imputed (differentiable) adjacency entry must receive a gradient.
+    A = torch.tensor(nx.to_numpy_array(small_graph), dtype=torch.float64)
+    A.requires_grad_(True)
+    X = torch.randn(5, 2, dtype=torch.float64) * 0.1
+    ranking_nll(X, A, n_negatives=3).backward()
+    assert A.grad is not None
+    assert torch.isfinite(A.grad).all()
+
+
+def test_pe_fermi_dirac_decoder_in_unit_interval():
+    X = torch.randn(7, 2, dtype=torch.float64) * 0.2
+    P = fermi_dirac_decoder(X, r=2.0, t=1.0)
+    assert P.shape == (7, 7)
+    assert (P > 0).all() and (P < 1).all()
+    # Closer pairs (diagonal, distance 0) get the highest probability.
+    assert torch.allclose(torch.diag(P), torch.sigmoid(torch.tensor(2.0)).double()
+                          * torch.ones(7, dtype=torch.float64), atol=1e-9)
+
+
+def test_pe_fermi_dirac_nll_scalar_and_finite(small_graph):
+    A = torch.tensor(nx.to_numpy_array(small_graph), dtype=torch.float64)
+    X = torch.randn(5, 2, dtype=torch.float64) * 0.1
+    loss = fermi_dirac_nll(X, A, r=2.0, t=1.0)
+    assert loss.shape == ()
+    assert torch.isfinite(loss) and loss.item() >= 0.0
+
+
+def test_pe_fit_shape(small_graph):
+    emb = PoincareEmbeddingsEmbedder(d=2, n_steps=5, log_every=0, random_state=0)
+    emb.fit(small_graph)
+    assert emb.embeddings().shape == (5, 2)
+
+
+def test_pe_embeddings_inside_ball(karate):
+    emb = PoincareEmbeddingsEmbedder(d=2, n_steps=30, log_every=0, random_state=0)
+    emb.fit(karate)
+    norms = np.linalg.norm(emb.embeddings(), axis=1)
+    assert (norms < 1.0).all()
+
+
+def test_pe_ranking_loss_decreases(karate):
+    emb = PoincareEmbeddingsEmbedder(
+        d=2, n_steps=150, log_every=0, random_state=0
+    )
+    emb.fit(karate)
+    hist = emb.loss_history
+    # Compare smoothed ends: negative sampling makes the loss stochastic.
+    assert np.mean(hist[-10:]) < np.mean(hist[:10])
+
+
+def test_pe_fermi_dirac_loss_decreases(karate):
+    emb = PoincareEmbeddingsEmbedder(
+        d=2, loss="fermi_dirac", n_steps=100, log_every=0, random_state=0
+    )
+    emb.fit(karate)
+    hist = emb.loss_history
+    assert hist[-1] < hist[0]
+
+
+def test_pe_with_unknown_edges(small_graph):
+    unknown = [(0, 1), (1, 2)]
+    emb = PoincareEmbeddingsEmbedder(
+        d=2, n_steps=10, log_every=0, random_state=0
+    )
+    emb.fit(small_graph, unknown_edges=unknown)
+    w = emb.imputed_weights
+    assert w.shape == (2,)
+    assert (w > 0).all() and (w < 1).all()
+
+
+def test_pe_no_unknown_edges(small_graph):
+    emb = PoincareEmbeddingsEmbedder(d=2, n_steps=5, log_every=0, random_state=0)
+    emb.fit(small_graph, unknown_edges=[])
+    assert emb.imputed_weights.shape == (0,)
+
+
+def test_pe_decode_ranking_is_distance(small_graph):
+    emb = PoincareEmbeddingsEmbedder(d=2, n_steps=5, log_every=0, random_state=0)
+    emb.fit(small_graph)
+    D = emb.decode(emb.embeddings())
+    assert D.shape == (5, 5)
+    np.testing.assert_allclose(np.diag(D), np.zeros(5), atol=1e-7)
+    np.testing.assert_allclose(D, D.T, atol=1e-9)
+
+
+def test_pe_decode_fermi_dirac_is_probability(small_graph):
+    emb = PoincareEmbeddingsEmbedder(
+        d=2, loss="fermi_dirac", n_steps=5, log_every=0, random_state=0
+    )
+    emb.fit(small_graph)
+    P = emb.decode(emb.embeddings())
+    assert P.shape == (5, 5)
+    assert (P > 0).all() and (P < 1).all()
+
+
+def test_pe_structural_similarity_is_adjacency(small_graph):
+    emb = PoincareEmbeddingsEmbedder()
+    s = emb.structural_similarity(small_graph)
+    np.testing.assert_array_equal(s, nx.to_numpy_array(small_graph,
+                                                       dtype=np.float64))
+
+
+def test_pe_raises_before_fit():
+    emb = PoincareEmbeddingsEmbedder()
+    with pytest.raises(RuntimeError, match="fit"):
+        emb.embeddings()
+
+
+def test_pe_invalid_loss_raises():
+    with pytest.raises(ValueError, match="ranking"):
+        PoincareEmbeddingsEmbedder(loss="bogus")
+
+
+def test_pe_capability_flags():
+    rank = PoincareEmbeddingsEmbedder(loss="ranking")
+    fd = PoincareEmbeddingsEmbedder(loss="fermi_dirac")
+    assert rank.is_gradient_based()
+    assert rank.supports_update() and rank.supports_node_update()
+    assert not rank.is_generative()        # ranking has no edge-prob decoder
+    assert fd.is_generative()              # Fermi-Dirac decoder is generative
+
+
+def test_pe_repr():
+    emb = PoincareEmbeddingsEmbedder(d=3, loss="fermi_dirac")
+    assert "d=3" in repr(emb)
+    assert "fermi_dirac" in repr(emb)
+
+
+def test_pe_disconnection_raises_on_update(small_graph):
+    emb = PoincareEmbeddingsEmbedder(d=2, n_steps=5, log_every=0, random_state=0)
+    emb.fit(small_graph)
+    with pytest.raises(ValueError, match="disconnect"):
+        emb.update(removed_edges=[(0, 1)])

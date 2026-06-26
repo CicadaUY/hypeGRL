@@ -96,5 +96,5 @@ and a natural loss is the Bernoulli cross-entropy
 
 API reference
 -------------
-.. autoclass:: hypegrl.embedders.hydra.HydraEmbedder
+.. autoclass:: hypegrl.embedders.poincare_embeddings.PoincareEmbeddingsEmbedder
    :members:
