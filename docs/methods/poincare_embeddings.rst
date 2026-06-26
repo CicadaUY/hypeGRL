@@ -57,7 +57,7 @@ The loss is then given by the negative log-likelihood
       e^{-\hat A_{ik}}
    },
 
-where :math:`\mathrm{Neg}(i,j) = \{k: A_{ik}=0\} \cup \{j\}` is the set of nonobserved relations for node :math:`i`.
+where :math:`\mathrm{Neg}(i,j) = \{k: A_{ik}=0\} \cup \{j\}` is the set of nonobserved relations for node :math:`i`. To obtain a scalable optimization procedure, this set is approximated by retaining the positive example together with a fixed number of randomly sampled negatives.
 
 Alternative probabilistic decoder
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
