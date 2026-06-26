@@ -24,10 +24,12 @@ scalability the negative set is approximated by the positive together with
 ``n_negatives`` uniformly sampled non-neighbours, re-sampled every step
 (stochastic, as in the original paper).
 
-**Fermi-Dirac loss (alternative, hyperbolic-random-graph interpretation).**
+**Fermi-Dirac loss (the paper's network-embedding objective).**
 The decoder is the Fermi-Dirac edge probability
-``P_ij = 1/(exp((d_P - r)/t) + 1)`` and the loss is the Bernoulli
-cross-entropy against the adjacency matrix.
+``P_ij = 1/(exp((d_P - r)/t) + 1)`` (paper eq. 6, Section 4.2) and the loss
+is the Bernoulli cross-entropy against the adjacency matrix. The paper uses
+this for the collaboration-network experiments; the ranking loss is used for
+the WordNet taxonomy experiments (Section 4.1).
 
 Unknown edges
 -------------
@@ -36,6 +38,24 @@ Unknown edges slot into the joint optimisation framework via
 its (possibly imputed) adjacency entry ``A_ij``, so gradients flow to the
 unknown edge weights; sampled negatives are drawn only from *known*
 non-edges (``A_ik == 0``), never from imputed pairs.
+
+Differences from the reference implementation
+---------------------------------------------
+The objective and distance match the paper exactly; the optimisation does
+not, by design:
+
+- **Optimiser:** we use geoopt ``RiemannianAdam``; the reference uses a
+  custom ``RiemannianSGD`` (natural gradient, ``lr=1000``). Our ``lr_X``
+  default is therefore on a different scale (Adam, ~1e-2).
+- **No burn-in:** the reference runs an initial burn-in phase (reduced lr +
+  degree-dampened negative sampling) to settle the angular layout. We do not.
+- **Fermi-Dirac uses *all* pairs:** ``fermi_dirac_nll`` sums the Bernoulli
+  cross-entropy over every ``i < j`` (exact, O(N^2)); the paper negatively
+  samples it as in the ranking loss. Fine at the graph sizes hypeGRL targets.
+- **Defaults** (``init_scale=1e-4``, ``n_negatives=50``) follow the reference
+  *code* (facebookresearch/poincare-embeddings), which differ from the
+  *paper* (1e-3 / 10). That repo only ships the ranking loss; the Fermi-Dirac
+  objective lives in the paper, not its code.
 """
 
 from __future__ import annotations
@@ -109,6 +129,9 @@ def sample_negatives(
     -------
     ``(N, n_negatives)`` long tensor of sampled column indices.
     """
+    # Uniform over non-neighbours, sampled once per node and shared across its
+    # positives. The reference rejects neighbours the same way, but samples
+    # fresh per positive pair and degree-dampens during burn-in (not done here).
     N = A.shape[0]
     not_self = ~torch.eye(N, dtype=torch.bool, device=A.device)
     probs = ((A == 0) & not_self).to(torch.float64)
@@ -239,6 +262,8 @@ def fermi_dirac_nll(
     P = fermi_dirac_decoder(X, r, t, manifold)
     P = torch.clamp(P, eps, 1.0 - eps)
 
+    # Exact: sum over every i < j. The paper negatively samples this term
+    # instead; we can afford the full O(N^2) sum at hypeGRL's graph sizes.
     N = X.shape[0]
     mask = torch.triu(
         torch.ones(N, N, dtype=torch.bool, device=X.device), diagonal=1
@@ -266,6 +291,7 @@ class PoincareEmbeddingsEmbedder(HyperbolicEmbedder):
         cross-entropy under the Fermi-Dirac edge-probability decoder.
     n_negatives:
         Number of negatives sampled per node per step (``"ranking"`` only).
+        Default ``50`` follows the reference code (the paper uses ``10``).
     r:
         Fermi-Dirac connection radius (``"fermi_dirac"`` only).
     t:
@@ -286,8 +312,9 @@ class PoincareEmbeddingsEmbedder(HyperbolicEmbedder):
         Torch device string.
     init_scale:
         Half-width of the uniform initialisation ``U(-init_scale, init_scale)``
-        used when ``X_init`` is not supplied (matching the near-origin start
-        of the original method).
+        used when ``X_init`` is not supplied (near-origin start, as in the
+        original). Default ``1e-4`` follows the reference code (the paper
+        uses ``1e-3``).
     random_state:
         Seed for reproducible initialisation and negative sampling.
 
@@ -307,7 +334,7 @@ class PoincareEmbeddingsEmbedder(HyperbolicEmbedder):
         self,
         d: int = 2,
         loss: str = "ranking",
-        n_negatives: int = 10,
+        n_negatives: int = 50,        # reference-code default (paper uses 10)
         r: float = 2.0,
         t: float = 1.0,
         lr_X: float = 1e-2,
@@ -317,7 +344,7 @@ class PoincareEmbeddingsEmbedder(HyperbolicEmbedder):
         grad_clip: float = 10.0,
         log_every: int = 50,
         device: str = "cpu",
-        init_scale: float = 1e-3,
+        init_scale: float = 1e-4,     # reference-code default (paper uses 1e-3)
         random_state: Optional[int] = None,
     ):
         if loss not in ("ranking", "fermi_dirac"):

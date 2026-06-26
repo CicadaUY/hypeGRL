@@ -12,7 +12,7 @@ In this method, embeddings are learned in the Poincaré ball model. This model i
 
 Learning is performed using Riemannian stochastic gradient descent, minimizing a loss function defined in terms of hyperbolic distances. Unlike methods such as Hydra, which seek to reconstruct a graph-derived distance matrix, Poincaré Embeddings operate directly on observed relations between nodes. The original formulation of Nickel and Kiela learns embeddings by maximizing the likelihood of observed node pairs under a ranking objective, bringing related nodes closer in hyperbolic space while pushing unrelated nodes apart through negative sampling.
 
-For network data, a closely related interpretation arises from hyperbolic random graph models, where the probability of an edge is modeled as a decreasing function of hyperbolic distance via a Fermi--Dirac distribution. This probabilistic decoder is not the objective used in the original paper, but provides a natural encoder--decoder interpretation of the learned embeddings.
+The paper actually uses *two* objectives for different data. The ranking objective above is used for the taxonomy-embedding experiments (Section 4.1). For network data (Section 4.2), it instead models the probability of an edge as a decreasing function of hyperbolic distance via a Fermi--Dirac distribution (following hyperbolic random graph models), trained with a cross-entropy loss. Both objectives are exposed here through the ``loss`` argument; the second gives a natural probabilistic encoder--decoder interpretation.
 
 Encoder-decoder instantiation
 -----------------------------
@@ -59,10 +59,10 @@ The loss is then given by the negative log-likelihood
 
 where :math:`\mathrm{Neg}(i,j) = \{k: A_{ik}=0\} \cup \{j\}` is the set of nonobserved relations for node :math:`i`. To obtain a scalable optimization procedure, this set is approximated by retaining the positive example together with a fixed number of randomly sampled negatives.
 
-Alternative probabilistic decoder
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Fermi--Dirac decoder (network embeddings)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-A commonly used alternative, motivated by hyperbolic random graph models, is to interpret distances through a Fermi--Dirac edge probability model. In this case, the decoder becomes
+For the network experiments (Section 4.2 of the paper), distances are instead interpreted through a Fermi--Dirac edge probability model, motivated by hyperbolic random graph models. In this case, the decoder becomes
 
 .. math::
 
@@ -93,6 +93,35 @@ and a natural loss is the Bernoulli cross-entropy
       +
       (1-A_{ij})\log(1-\hat A_{ij})
    \Bigr].
+
+Implementation details
+----------------------
+
+Both objectives are selected through the ``loss`` argument of
+:class:`~hypegrl.embedders.poincare_embeddings.PoincareEmbeddingsEmbedder`
+(``"ranking"`` for eq. (5), ``"fermi_dirac"`` for the network objective). The
+distance and the objectives match the paper exactly; the optimisation differs
+from the authors' reference implementation in a few deliberate ways:
+
+- **Optimiser.** We optimise with geoopt ``RiemannianAdam``. The reference uses
+  a custom ``RiemannianSGD`` (natural-gradient update with ``lr=1000``); our
+  ``lr_X`` default is therefore on a different scale (Adam, ~\ ``1e-2``).
+- **No burn-in.** The reference runs an initial burn-in phase (reduced learning
+  rate together with degree-dampened negative sampling) to settle the angular
+  layout before the main run. This is not implemented here.
+- **Negative sampling.** For the ranking loss we draw ``n_negatives`` negatives
+  per node, re-sampled each step, sharing them across that node's positives;
+  the reference samples fresh negatives per positive pair. For unknown edges,
+  negatives are drawn only from *known* non-edges so imputed pairs are never
+  pushed apart.
+- **Fermi--Dirac is computed over all pairs.** ``fermi_dirac_nll`` sums the
+  cross-entropy over every :math:`i<j` (exact, :math:`O(N^2)`); the paper
+  negatively samples this term as well.
+- **Defaults follow the reference *code*** (``init_scale=1e-4``,
+  ``n_negatives=50``), which differ from the values quoted in the *paper*
+  (``1e-3`` and ``10``). Note also that the authors' public repository
+  (``facebookresearch/poincare-embeddings``) only ships the ranking loss; the
+  Fermi--Dirac objective appears in the paper but not in that code.
 
 API reference
 -------------
