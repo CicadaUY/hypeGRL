@@ -47,8 +47,9 @@ not, by design:
 - **Optimiser:** we use geoopt ``RiemannianAdam``; the reference uses a
   custom ``RiemannianSGD`` (natural gradient, ``lr=1000``). Our ``lr_X``
   default is therefore on a different scale (Adam, ~1e-2).
-- **No burn-in:** the reference runs an initial burn-in phase (reduced lr +
-  degree-dampened negative sampling) to settle the angular layout. We do not.
+- **Burn-in:** like the reference, we run an initial burn-in phase by default
+  (reduced lr + degree-dampened negative sampling) to settle the angular
+  layout; set ``burnin=0`` to disable it.
 - **Fermi-Dirac uses *all* pairs:** ``fermi_dirac_nll`` sums the Bernoulli
   cross-entropy over every ``i < j`` (exact, O(N^2)); the paper negatively
   samples it as in the ranking loss. Fine at the graph sizes hypeGRL targets.
@@ -106,6 +107,7 @@ def poincare_distance_matrix(
 def sample_negatives(
     A: torch.Tensor,
     n_negatives: int,
+    node_weights: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     """
     Sample ``n_negatives`` non-neighbour indices for every node.
@@ -117,6 +119,9 @@ def sample_negatives(
     other nodes. Sampling is with replacement, so ``n_negatives`` may exceed
     the number of distinct candidates.
 
+    Negatives are sampled once per node and shared across that node's
+    positives (the reference samples fresh per positive pair).
+
     Parameters
     ----------
     A:
@@ -124,23 +129,29 @@ def sample_negatives(
         index sampling).
     n_negatives:
         Number of negatives to draw per node.
+    node_weights:
+        Optional ``(N,)`` non-negative per-node weights. When given, candidate
+        ``k`` is drawn with probability ``∝ node_weights[k]`` (still restricted
+        to non-neighbours); when ``None``, sampling is uniform over
+        non-neighbours. Used for the burn-in's degree-dampened sampling.
 
     Returns
     -------
     ``(N, n_negatives)`` long tensor of sampled column indices.
     """
-    # Uniform over non-neighbours, sampled once per node and shared across its
-    # positives. The reference rejects neighbours the same way, but samples
-    # fresh per positive pair and degree-dampens during burn-in (not done here).
     N = A.shape[0]
     not_self = ~torch.eye(N, dtype=torch.bool, device=A.device)
-    probs = ((A == 0) & not_self).to(torch.float64)
+    candidate = ((A == 0) & not_self).to(torch.float64)
+    if node_weights is not None:
+        candidate = candidate * node_weights.unsqueeze(0)
 
-    empty = probs.sum(dim=1) == 0
+    # Rows with no eligible candidate (fully connected node, or all candidate
+    # weights zero) fall back to uniform over all other nodes.
+    empty = candidate.sum(dim=1) == 0
     if empty.any():
-        probs[empty] = not_self[empty].to(torch.float64)
+        candidate[empty] = not_self[empty].to(torch.float64)
 
-    return torch.multinomial(probs, n_negatives, replacement=True)
+    return torch.multinomial(candidate, n_negatives, replacement=True)
 
 
 def ranking_nll(
@@ -149,6 +160,7 @@ def ranking_nll(
     n_negatives: int = 10,
     manifold: geoopt.Manifold = POINCARE_BALL,
     eps: float = 1e-12,
+    node_weights: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     """
     Soft-ranking negative log-likelihood of Nickel & Kiela (2017).
@@ -171,6 +183,10 @@ def ranking_nll(
         Embedding manifold.
     eps:
         Numerical floor for the log argument.
+    node_weights:
+        Optional ``(N,)`` sampling weights forwarded to
+        :func:`sample_negatives` (e.g. ``degree^dampening`` during burn-in).
+        ``None`` gives uniform negative sampling.
 
     Returns
     -------
@@ -178,7 +194,7 @@ def ranking_nll(
     """
     D = poincare_distance_matrix(X, manifold)              # (N, N)
 
-    neg_idx = sample_negatives(A.detach(), n_negatives)    # (N, n_neg)
+    neg_idx = sample_negatives(A.detach(), n_negatives, node_weights)  # (N, n_neg)
     d_neg = torch.gather(D, 1, neg_idx)                    # (N, n_neg)
     exp_neg_sum = torch.exp(-d_neg).sum(dim=1)             # (N,)
 
@@ -301,7 +317,23 @@ class PoincareEmbeddingsEmbedder(HyperbolicEmbedder):
     lr_a:
         Learning rate for Adam on the unknown edge weights.
     n_steps:
-        Number of gradient steps.
+        Number of gradient steps in the main phase.
+    burnin:
+        Number of initial burn-in steps (``0`` disables). These steps run
+        *before* the main phase at a reduced learning rate
+        (``lr * burnin_lr_multiplier``) and, for the ranking loss, draw
+        negatives ``∝ degree^sample_dampening`` instead of uniformly,
+        settling the angular layout before the main run. Has no sampling
+        effect on the Fermi-Dirac loss (which sums over all pairs), where it
+        acts purely as a reduced-lr warm-up. Default ``20`` follows the
+        reference code (whose unit is epochs rather than full-batch steps).
+    burnin_lr_multiplier:
+        Learning-rate factor applied during burn-in. Default ``0.01`` follows
+        the reference code.
+    sample_dampening:
+        Exponent for degree-dampened negative sampling during burn-in
+        (probability ``∝ degree^sample_dampening``). Default ``0.75`` follows
+        the reference code; ``0`` recovers uniform sampling.
     regularize_a:
         L2 regularisation on unknown edge weights.
     grad_clip:
@@ -340,6 +372,9 @@ class PoincareEmbeddingsEmbedder(HyperbolicEmbedder):
         lr_X: float = 1e-2,
         lr_a: float = 1e-2,
         n_steps: int = 500,
+        burnin: int = 20,                     # reference-code default
+        burnin_lr_multiplier: float = 0.01,   # reference-code default
+        sample_dampening: float = 0.75,       # reference-code default
         regularize_a: float = 0.0,
         grad_clip: float = 10.0,
         log_every: int = 50,
@@ -352,26 +387,33 @@ class PoincareEmbeddingsEmbedder(HyperbolicEmbedder):
                 f"loss must be 'ranking' or 'fermi_dirac', got {loss!r}."
             )
 
-        self.d            = d
-        self.loss         = loss
-        self.n_negatives  = n_negatives
-        self.r            = r
-        self.t            = t
-        self.lr_X         = lr_X
-        self.lr_a         = lr_a
-        self.n_steps      = n_steps
-        self.regularize_a = regularize_a
-        self.grad_clip    = grad_clip
-        self.log_every    = log_every
-        self.device       = device
-        self.init_scale   = init_scale
-        self.random_state = random_state
+        self.d                    = d
+        self.loss                 = loss
+        self.n_negatives          = n_negatives
+        self.r                    = r
+        self.t                    = t
+        self.lr_X                 = lr_X
+        self.lr_a                 = lr_a
+        self.n_steps              = n_steps
+        self.burnin               = burnin
+        self.burnin_lr_multiplier = burnin_lr_multiplier
+        self.sample_dampening     = sample_dampening
+        self.regularize_a         = regularize_a
+        self.grad_clip            = grad_clip
+        self.log_every            = log_every
+        self.device               = device
+        self.init_scale           = init_scale
+        self.random_state         = random_state
 
         self._X: Optional[np.ndarray]               = None
         self._a_omega: Optional[np.ndarray]         = None
         self._loss_history: Optional[list[float]]   = None
         self._unknown_edges: list[tuple[int, int]]  = []
         self._G: Optional[nx.Graph]                 = None
+
+        # Burn-in state, read by ``distance`` during the burn-in phase.
+        self._burnin_active: bool                   = False
+        self._neg_weights: Optional[torch.Tensor]   = None
 
     # ------------------------------------------------------------------
     # HyperbolicEmbedder interface
@@ -416,50 +458,95 @@ class PoincareEmbeddingsEmbedder(HyperbolicEmbedder):
                 -self.init_scale, self.init_scale, size=(N, self.d)
             )
 
+        # Degree-dampened sampling weights (degree^dampening), used only while
+        # the burn-in phase is active. Degree follows G.nodes() order, which
+        # matches the embedding/adjacency row order.
+        deg = self.structural_similarity(G).sum(axis=1)
+        self._neg_weights = torch.tensor(
+            np.power(deg, self.sample_dampening),
+            dtype=torch.float64, device=torch.device(self.device),
+        )
+
+        loss_history: list[float] = []
+        X_cur, a_cur = X_init, a_omega_init
+
+        # ── Burn-in phase: reduced lr + degree-dampened sampling ─────────────
+        if self.burnin > 0:
+            self._burnin_active = True
+            try:
+                res_b = self._optimize_phase(
+                    G, unknown_edges, X_cur, a_cur,
+                    lr_X=self.lr_X * self.burnin_lr_multiplier,
+                    lr_a=self.lr_a * self.burnin_lr_multiplier,
+                    n_steps=self.burnin,
+                )
+            finally:
+                self._burnin_active = False
+            X_cur = res_b["X"]
+            a_cur = res_b["a_omega"] if unknown_edges else None
+            loss_history += res_b["loss_history"]
+
+        # ── Main phase: full lr + uniform sampling ───────────────────────────
+        result = self._optimize_phase(
+            G, unknown_edges, X_cur, a_cur,
+            lr_X=self.lr_X, lr_a=self.lr_a, n_steps=self.n_steps,
+        )
+        loss_history += result["loss_history"]
+
+        self._X             = result["X"]
+        self._a_omega       = result["a_omega"]
+        self._loss_history  = loss_history
+        self._unknown_edges = unknown_edges
+        self._G             = G
+        return self
+
+    def _optimize_phase(
+        self,
+        G: nx.Graph,
+        unknown_edges: list[tuple[int, int]],
+        X_init: np.ndarray,
+        a_omega_init: Optional[np.ndarray],
+        lr_X: float,
+        lr_a: float,
+        n_steps: int,
+    ) -> dict:
+        """
+        Run one optimisation phase, dispatching to the fixed-graph or
+        joint (unknown-edge) optimiser. Returns a dict with ``X``,
+        ``a_omega`` and ``loss_history``.
+        """
         if not unknown_edges:
             # Fixed graph: structural similarity is the (constant) adjacency.
-            s_A = self.structural_similarity(G)
-
-            def loss_fn(X: torch.Tensor, A: torch.Tensor) -> torch.Tensor:
-                return self.distance(X, A)
-
             result = riemannian_optimize(
                 X_init    = X_init,
-                s_A       = s_A,
-                loss_fn   = loss_fn,
+                s_A       = self.structural_similarity(G),
+                loss_fn   = self.distance,
                 manifold  = POINCARE_BALL,
-                lr        = self.lr_X,
-                n_steps   = self.n_steps,
+                lr        = lr_X,
+                n_steps   = n_steps,
                 grad_clip = self.grad_clip,
                 log_every = self.log_every,
                 device    = self.device,
             )
-            self._a_omega = np.array([])
+            result["a_omega"] = np.array([])
+            return result
 
-        else:
-            result = joint_optimize(
-                G             = G,
-                loss_fn       = self.distance,
-                X_init        = X_init,
-                manifold      = POINCARE_BALL,
-                unknown_edges = unknown_edges,
-                a_omega_init  = a_omega_init,
-                lr_X          = self.lr_X,
-                lr_a          = self.lr_a,
-                n_steps       = self.n_steps,
-                regularize_a  = self.regularize_a,
-                grad_clip     = self.grad_clip,
-                log_every     = self.log_every,
-                device        = self.device,
-                verbose       = self.log_every > 0,
-            )
-            self._a_omega = result["a_omega"]
-
-        self._X             = result["X"]
-        self._loss_history  = result["loss_history"]
-        self._unknown_edges = unknown_edges
-        self._G             = G
-        return self
+        return joint_optimize(
+            G             = G,
+            loss_fn       = self.distance,
+            X_init        = X_init,
+            manifold      = POINCARE_BALL,
+            unknown_edges = unknown_edges,
+            a_omega_init  = a_omega_init,
+            lr_X          = lr_X,
+            lr_a          = lr_a,
+            n_steps       = n_steps,
+            regularize_a  = self.regularize_a,
+            grad_clip     = self.grad_clip,
+            log_every     = self.log_every,
+            device        = self.device,
+            verbose       = self.log_every > 0,
+        )
 
     def distance(self, X: torch.Tensor, A: torch.Tensor) -> torch.Tensor:
         """
@@ -477,7 +564,11 @@ class PoincareEmbeddingsEmbedder(HyperbolicEmbedder):
         Scalar loss tensor.
         """
         if self.loss == "ranking":
-            return ranking_nll(X, A, self.n_negatives, POINCARE_BALL)
+            # Degree-dampened negatives only while burning in; uniform otherwise.
+            weights = self._neg_weights if self._burnin_active else None
+            return ranking_nll(
+                X, A, self.n_negatives, POINCARE_BALL, node_weights=weights
+            )
         return fermi_dirac_nll(X, A, self.r, self.t, POINCARE_BALL)
 
     def embeddings(self) -> np.ndarray:

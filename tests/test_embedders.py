@@ -1001,3 +1001,61 @@ def test_pe_disconnection_raises_on_update(small_graph):
     emb.fit(small_graph)
     with pytest.raises(ValueError, match="disconnect"):
         emb.update(removed_edges=[(0, 1)])
+
+
+def test_pe_sample_negatives_respects_node_weights():
+    # Node 0 may have negatives {2,3,4}; weight node 3 enormously and the rest 0
+    # -> all sampled negatives for node 0 must be node 3.
+    A = torch.tensor(
+        [[0, 1, 0, 0, 0],
+         [1, 0, 0, 0, 0],
+         [0, 0, 0, 0, 0],
+         [0, 0, 0, 0, 0],
+         [0, 0, 0, 0, 0]], dtype=torch.float64
+    )
+    w = torch.tensor([0.0, 0.0, 0.0, 1.0, 0.0], dtype=torch.float64)
+    neg = sample_negatives(A, n_negatives=15, node_weights=w)
+    assert (neg[0] == 3).all()          # only positively weighted candidate
+    # Self and the true neighbour (node 1) are still never sampled for node 0.
+    assert not (neg[0] == 0).any()
+    assert not (neg[0] == 1).any()
+
+
+def test_pe_burnin_runs_and_extends_loss_history(karate):
+    burnin, n_steps = 20, 40
+    emb = PoincareEmbeddingsEmbedder(
+        d=2, burnin=burnin, n_steps=n_steps, log_every=0, random_state=0
+    )
+    emb.fit(karate)
+    assert len(emb.loss_history) == burnin + n_steps
+    X = emb.embeddings()
+    assert X.shape == (34, 2)
+    assert (np.linalg.norm(X, axis=1) < 1.0).all()
+    # Burn-in state must be cleared after fit.
+    assert emb._burnin_active is False
+
+
+def test_pe_burnin_default_matches_reference():
+    # Default burn-in follows the reference code (20).
+    assert PoincareEmbeddingsEmbedder().burnin == 20
+
+
+def test_pe_burnin_zero_disables(karate):
+    n_steps = 30
+    emb = PoincareEmbeddingsEmbedder(
+        d=2, burnin=0, n_steps=n_steps, log_every=0, random_state=0
+    )
+    emb.fit(karate)
+    assert len(emb.loss_history) == n_steps
+
+
+def test_pe_burnin_with_unknown_edges(small_graph):
+    unknown = [(0, 1), (1, 2)]
+    emb = PoincareEmbeddingsEmbedder(
+        d=2, burnin=10, n_steps=10, log_every=0, random_state=0
+    )
+    emb.fit(small_graph, unknown_edges=unknown)
+    w = emb.imputed_weights
+    assert w.shape == (2,)
+    assert (w > 0).all() and (w < 1).all()
+    assert len(emb.loss_history) == 20

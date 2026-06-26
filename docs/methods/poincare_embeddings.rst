@@ -106,9 +106,12 @@ from the authors' reference implementation in a few deliberate ways:
 - **Optimiser.** We optimise with geoopt ``RiemannianAdam``. The reference uses
   a custom ``RiemannianSGD`` (natural-gradient update with ``lr=1000``); our
   ``lr_X`` default is therefore on a different scale (Adam, ~\ ``1e-2``).
-- **No burn-in.** The reference runs an initial burn-in phase (reduced learning
-  rate together with degree-dampened negative sampling) to settle the angular
-  layout before the main run. This is not implemented here.
+- **Burn-in.** Like the reference, an initial burn-in phase runs by default —
+  reduced learning rate together with degree-dampened (:math:`\propto
+  \deg^{0.75}`) negative sampling — to settle the angular layout before the
+  main run. It is controlled by the ``burnin`` constructor argument (with
+  ``burnin_lr_multiplier`` and ``sample_dampening``); set ``burnin=0`` to
+  disable it.
 - **Negative sampling.** For the ranking loss we draw ``n_negatives`` negatives
   per node, re-sampled each step, sharing them across that node's positives;
   the reference samples fresh negatives per positive pair. For unknown edges,
