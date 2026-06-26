@@ -126,6 +126,31 @@ from the authors' reference implementation in a few deliberate ways:
   (``facebookresearch/poincare-embeddings``) only ships the ranking loss; the
   Fermi--Dirac objective appears in the paper but not in that code.
 
+Comparison with gensim's ``PoincareModel``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``gensim.models.poincare.PoincareModel`` is a third faithful implementation of
+the ranking objective. Its distance, softmax-ranking loss and reduced-lr
+burn-in match ours, and it shares the same structural differences as the
+reference code above (RSGD natural gradient rather than geoopt
+``RiemannianAdam``; minibatch SGD over an edge list rather than full-batch;
+fresh negatives per positive pair rather than per node). Beyond those, a few
+behaviours are specific to gensim:
+
+- **Negative sampling is degree-proportional in every phase.** gensim draws
+  negatives :math:`\propto \deg` (linear) throughout training, whereas we
+  sample uniformly except during burn-in (where we use
+  :math:`\propto \deg^{0.75}`); gensim's burn-in only lowers the learning rate.
+- **L2 regularisation on embeddings.** gensim's loss adds
+  ``regularization_coeff * ||v||^2`` (default ``1.0``), pulling embeddings
+  toward the origin; we apply no embedding regularisation (``regularize_a``
+  only affects imputed unknown-edge weights).
+- **Ranking only, binary, no unknown edges.** gensim implements no
+  Fermi--Dirac decoder, consumes a binary edge list (the project wrapper
+  symmetrises an adjacency into ``(i, j)``/``(j, i)`` pairs), and has no notion
+  of weighted or unknown edges — unlike our ``A_ij``-weighted positives and
+  joint unknown-edge optimisation.
+
 API reference
 -------------
 .. autoclass:: hypegrl.embedders.poincare_embeddings.PoincareEmbeddingsEmbedder
