@@ -765,6 +765,8 @@ def test_hydra_plus_x_init_equivalent_to_default(small_graph):
 
 
 def test_hypermap_x_init_equivalent_to_default(karate):
+    """Passing a cached warm start via ``X_init`` (skipping the greedy init)
+    must reproduce the default ``fit`` that runs the greedy init itself."""
     n_steps = 10
 
     # Reuse the same embedder instance throughout so that _nodes_sorted is
@@ -786,7 +788,14 @@ def test_hypermap_x_init_equivalent_to_default(karate):
     emb.fit(karate, X_init=X_init)
     X_explicit = emb.embeddings()
 
-    np.testing.assert_array_equal(X_full, X_explicit)
+    # Not bit-exact: the greedy init is fully deterministic, but the gradient
+    # refinement is only reproducible to ~1e-14 — even two runs from the
+    # byte-identical warm start differ at that scale (non-associative float
+    # accumulation in the torch/geoopt distance/optimiser, present even
+    # single-threaded). assert_array_equal would trip on that meaningless
+    # round-off, so compare with a tolerance well above it (same rationale as
+    # test_dmercator_x_init_equivalent_to_default).
+    np.testing.assert_allclose(X_full, X_explicit, atol=1e-9)
 
 
 def test_hypermap_refinement_adjacency_matches_embedding_order():
