@@ -8,3 +8,6 @@ __pycache__/
 .build/
 dist/
 .coverage
+
+# Sphinx build output
+docs/_build/

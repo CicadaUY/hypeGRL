@@ -10,7 +10,7 @@ reparametrized as sigmoid(a_omega_raw) to keep them in (0, 1).
 
 The optimization is performed via RiemannianAdam (geoopt) for X and
 standard Adam for a_omega_raw, with optional L2 regularization on a_Omega
-for well-posedness when |Omega| is large or the graph is tree-like.
+for well-posedness when ``|Omega|`` is large or the graph is tree-like.
 """
 
 from __future__ import annotations

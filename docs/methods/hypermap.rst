@@ -79,6 +79,12 @@ hyperspherical angles set to zero
 (:func:`~hypegrl.manifolds.poincare.hyperspherical_to_poincare`); the gradient
 step then moves nodes freely in the full :math:`d`-dimensional space.
 
+The exact algorithm — both phases, the analytic radius/threshold formulas, the
+correction steps and the ``k_speedup`` heuristic, together with the pitfalls
+reconciled against the upstream C++ code — is recorded verbatim in
+:doc:`hypermap_pseudocode`. That page is the specification the init module
+tracks; §7 there records how the gradient refinement is kept consistent with it.
+
 Gradient refinement
 -------------------
 :meth:`~hypegrl.embedders.hypermap.HyperMapEmbedder.fit` wraps the warm start as a
@@ -123,6 +129,11 @@ treated as free variables and jointly optimised through the shared joint optimis
 :class:`~hypegrl.embedders.poincare_maps.PoincareMapsEmbedder` and
 :class:`~hypegrl.embedders.poincare_embeddings.PoincareEmbeddingsEmbedder`), with
 the Fermi--Dirac NLL as the loss.
+
+.. toctree::
+   :hidden:
+
+   hypermap_pseudocode
 
 API reference
 -------------

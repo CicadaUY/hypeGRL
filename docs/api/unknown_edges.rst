@@ -4,12 +4,12 @@ Unknown Edges
 Joint Optimizer
 ---------------
 
-.. automodule:: hypegrl.unknown_edges.joint_optimizer
+.. automodule:: hypegrl.inference.joint_optimizer
    :members:
 
 Imputation
 ----------
 
-.. automodule:: hypegrl.unknown_edges.imputation
+.. automodule:: hypegrl.inference.imputation
    :members:
 

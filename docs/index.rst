@@ -12,7 +12,7 @@ hypeGRL
    :caption: Background material
 
    background/hyperbolic_geometry
-   background/hyperbolic_graphs
+   background/hyperbolic_graph
    background/encoder_decoder
 
 .. toctree::

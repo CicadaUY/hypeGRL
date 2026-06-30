@@ -171,7 +171,7 @@ def compute_a_omega_init(
         unknown_edges: list[tuple[int, int]]
         ) -> np.array:
     """
-    A simple estimation for the weight of the edge between each pair of nodes in ``unknown_edges``is computed.
+    A simple estimation for the weight of the edge between each pair of nodes in ``unknown_edges`` is computed.
     The idea is to simply use the mean per row and column in the adjacency matrix (naturally, ignoring the unknown entries).
 
     Parameters
