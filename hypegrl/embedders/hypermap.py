@@ -434,11 +434,17 @@ class HyperMapEmbedder(HyperbolicEmbedder):
         # thresholds in self._R); otherwise the loss pairs each hyperbolic
         # distance with the wrong adjacency entry. unknown_edges are remapped to
         # the same order; their list order (and hence a_omega alignment) is kept.
+        #
+        # Edges are added WITHOUT their weight: HyperMap is a binary model (the
+        # Fermi-Dirac NLL is a binary cross-entropy, the greedy init treats edges
+        # as sets, and the C++ reads an unweighted edgelist). Passing edge weights
+        # through would make ``(1 - A_ij)`` negative for A_ij > 1 and drive the
+        # "NLL" unbounded below (e.g. nx.karate_club_graph carries weights 1-7).
         order = {node: idx for idx, node in enumerate(self._nodes_sorted)}
         G_sorted = nx.Graph()
         G_sorted.add_nodes_from(range(len(self._nodes_sorted)))
         G_sorted.add_edges_from(
-            (order[u], order[v], data) for u, v, data in G.edges(data=True)
+            (order[u], order[v]) for u, v in G.edges()
         )
         unknown_sorted = [(order[u], order[v]) for (u, v) in unknown_edges]
 
@@ -494,12 +500,15 @@ class HyperMapEmbedder(HyperbolicEmbedder):
 
     def structural_similarity(self, G: nx.Graph) -> np.ndarray:
         """
-        Return the adjacency matrix as the structural similarity (``s(A) = A``).
+        Return the binary adjacency matrix as the structural similarity
+        (``s(A) = A``).
 
         HyperMap uses the adjacency matrix directly as its structural
-        target, unlike Poincaré Maps which uses the forest matrix.
+        target, unlike Poincaré Maps which uses the forest matrix. The matrix
+        is binarised: HyperMap is an unweighted model (the Fermi-Dirac decoder
+        is a binary connection probability), so any edge weights are ignored.
         """
-        return nx.to_numpy_array(G, dtype=np.float64)
+        return (nx.to_numpy_array(G, dtype=np.float64) > 0.0).astype(np.float64)
 
     def decode(self, X: np.ndarray) -> np.ndarray:
         """
