@@ -25,7 +25,10 @@ from hypegrl.embedders.poincare_embeddings import (
 )
 from hypegrl.embedders.hydra import HydraEmbedder
 from hypegrl.embedders.hydra_plus import HydraPlusEmbedder
-from hypegrl.embedders.hypermap import HyperMapEmbedder
+from hypegrl.embedders.hypermap import (
+    HyperMapEmbedder,
+    fermi_dirac_nll as hypermap_fermi_dirac_nll,
+)
 from hypegrl.embedders.dmercator import DMercatorEmbedder
 from hypegrl.embedders._dmercator_init import compute_R
 from hypegrl.manifolds.poincare import polar_to_poincare, poincare_distances_polar
@@ -784,6 +787,61 @@ def test_hypermap_x_init_equivalent_to_default(karate):
     X_explicit = emb.embeddings()
 
     np.testing.assert_array_equal(X_full, X_explicit)
+
+
+def test_hypermap_refinement_adjacency_matches_embedding_order():
+    """Regression test for the node-ordering bug in the gradient refinement.
+
+    The embeddings ``X``, the per-node thresholds ``R`` and the returned rows are
+    all in degree-descending (``nodes_sorted``) order, but ``joint_optimize``
+    builds its adjacency in the graph's node-iteration order. A previous version
+    passed the original graph straight through, so each hyperbolic distance was
+    paired with the *wrong* adjacency entry (the i-th highest-degree node's
+    distance against the original-label i-th node's edges).
+
+    ``loss_history[0]`` is the loss evaluated on the initial embedding *before*
+    any optimiser step, so it must equal the Fermi-Dirac NLL recomputed with the
+    adjacency in ``nodes_sorted`` order — and must NOT equal the misaligned value
+    the bug produced.
+    """
+    # Distinct degrees so degree-descending order differs from node order and the
+    # two orderings give clearly different losses.
+    G = nx.Graph()
+    G.add_edges_from([(0, 1), (0, 2), (0, 3), (0, 4), (1, 2), (3, 4), (4, 5)])
+
+    common = dict(d=2, gamma=2.5, T=0.5, zeta=1.0, log_every=0, verbose_init=False)
+
+    # Warm start only (n_steps=0): capture X_init, R and the node ordering.
+    emb0 = HyperMapEmbedder(n_steps=0, **common)
+    emb0.fit(G)
+    X_init       = emb0.embeddings()
+    nodes_sorted = emb0.nodes_sorted
+    assert nodes_sorted != list(G.nodes()), "test graph must reorder the nodes"
+
+    z2t = emb0.zeta / (2.0 * emb0.T)
+    X_t = torch.tensor(X_init, dtype=torch.float64)
+    R_t = torch.tensor(emb0._R, dtype=torch.float64)
+
+    A_aligned = torch.tensor(
+        nx.to_numpy_array(G, nodelist=nodes_sorted, dtype=np.float64)
+    )
+    A_misaligned = torch.tensor(nx.to_numpy_array(G, dtype=np.float64))
+
+    loss_aligned    = hypermap_fermi_dirac_nll(X_t, A_aligned, R_t, z2t).item()
+    loss_misaligned = hypermap_fermi_dirac_nll(X_t, A_misaligned, R_t, z2t).item()
+
+    # Sanity: the reordering genuinely changes the loss for this graph.
+    assert not np.isclose(loss_aligned, loss_misaligned)
+
+    # One refinement step: loss_history[0] is the loss on X_init before stepping.
+    emb1 = HyperMapEmbedder(n_steps=1, **common)
+    emb1.fit(G)
+    loss0 = emb1.loss_history[0]
+
+    # The refinement uses the adjacency aligned to the embedding order ...
+    np.testing.assert_allclose(loss0, loss_aligned, rtol=1e-9, atol=1e-9)
+    # ... and not the misaligned one (which the bug would have produced).
+    assert not np.isclose(loss0, loss_misaligned)
 
 
 def test_dmercator_x_init_equivalent_to_default(karate):
