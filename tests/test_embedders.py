@@ -200,7 +200,7 @@ def test_embedder_repr():
 def test_embedder_capability_flags():
     emb = PoincareMapsEmbedder()
     assert emb.is_gradient_based()
-    assert emb.is_generative()
+    assert not emb.is_generative()
     assert emb.supports_update()
     assert emb.supports_node_update()
 

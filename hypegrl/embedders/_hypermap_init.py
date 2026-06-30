@@ -241,8 +241,32 @@ def hyperbolic_dist(
     return (1.0 / zeta) * np.arccosh(arg)
 
 
+def _hyperbolic_dist_vec(r1, r2, dtheta, zeta):
+    """
+    Vectorized H^2 distance, numerically matching :func:`hyperbolic_dist`.
+
+    ``r1``, ``r2`` and ``dtheta`` broadcast against each other (any may be a
+    scalar or an array). The arithmetic is term-for-term the same as the scalar
+    version — same operation order and the same ``dtheta == 0 -> |r1 - r2|``
+    special case — so the per-element results are identical to looping with
+    :func:`hyperbolic_dist`. ``np.maximum(arg, 1.0)`` only guards ``arccosh``
+    against round-off on the (discarded) ``dtheta == 0`` entries, where ``arg``
+    can dip a hair below 1; for ``dtheta > 0`` we always have ``arg >= 1`` so it
+    is a no-op there.
+    """
+    arg = (
+        np.cosh(zeta * r1) * np.cosh(zeta * r2)
+        - np.sinh(zeta * r1) * np.sinh(zeta * r2) * np.cos(dtheta)
+    )
+    return np.where(
+        dtheta == 0.0,
+        np.abs(r1 - r2),
+        (1.0 / zeta) * np.arccosh(np.maximum(arg, 1.0)),
+    )
+
+
 def angular_sep(theta1: float, theta2: float) -> float:
-    """Circular angular separation in [0, pi]."""
+    """Circular angular separation in [0, pi] (vectorizes over array inputs)."""
     return np.pi - abs(np.pi - abs(theta1 - theta2))
 
 
@@ -450,28 +474,33 @@ def fd_loglikelihood(
 
     nodes2compare: indices of nodes to compare against.
                    If None, uses all earlier nodes (0..i-1).
+
+    Vectorized over the comparison nodes: one ``(M,)`` array of distances /
+    probabilities instead of a Python loop of scalar calls. The math is
+    element-wise identical to the scalar path (see :func:`_hyperbolic_dist_vec`);
+    only the summation order changes, which can shift the total by a last ULP.
     """
-    zeta_over_2T = params["zeta"] / (2.0 * params["T"])
+    zeta         = params["zeta"]
+    zeta_over_2T = zeta / (2.0 * params["T"])
     node_v       = nodes_sorted[i]
     compare      = nodes2compare if nodes2compare is not None else range(i)
 
-    logL = 0.0
-    for j in compare:
-        if not is_here[j]:
-            continue
-        node_u = nodes_sorted[j]
+    # Comparison nodes that are already placed in the embedding.
+    J = np.fromiter((j for j in compare if is_here[j]), dtype=np.intp)
+    if J.size == 0:
+        return 0.0
 
-        dtheta = angular_sep(theta_v, angles[j])
-        x = hyperbolic_dist(r_final[i], r_final[j], dtheta, params["zeta"])
-        P = fermi_dirac(x, R[i], zeta_over_2T)
-        P = np.clip(P, 1e-12, 1.0 - 1e-12)
+    # node i is the youngest here, so every pair uses its threshold R[i].
+    dtheta = angular_sep(theta_v, angles[J])
+    x      = _hyperbolic_dist_vec(r_final[i], r_final[J], dtheta, zeta)
+    P      = fermi_dirac(x, R[i], zeta_over_2T)
+    P      = np.clip(P, 1e-12, 1.0 - 1e-12)
 
-        if node_u in adj[node_v]:
-            logL += np.log(P)
-        else:
-            logL += np.log(1.0 - P)
-
-    return logL
+    # Edge -> log P ; non-edge -> log(1 - P).
+    is_edge = np.fromiter(
+        (nodes_sorted[j] in adj[node_v] for j in J), dtype=bool, count=J.size
+    )
+    return np.where(is_edge, np.log(P), np.log(1.0 - P)).sum()
 
 
 def fd_loglikelihood_correction(
@@ -492,39 +521,38 @@ def fd_loglikelihood_correction(
     Unlike fd_loglikelihood, this recomputes pair-wise radii from r_init for
     every (v, l) pair based on who arrived later (larger r_init = later arrival),
     and uses R of the later-arriving node — matching C++ lines 451-468.
+
+    Vectorized over the comparison nodes: the per-pair "who arrived later" branch
+    becomes an ``np.where`` mask, element-wise identical to the scalar loop.
     """
     zeta         = params["zeta"]
     beta         = params["beta"]
     zeta_over_2T = zeta / (2.0 * params["T"])
     node_v       = nodes_sorted[i]
 
-    logL = 0.0
-    for j in nodes2compare:
-        if j == i:
-            continue
-        node_u = nodes_sorted[j]
+    J = np.fromiter((j for j in nodes2compare if j != i), dtype=np.intp)
+    if J.size == 0:
+        return 0.0
 
-        # Determine who arrived later based on r_init (monotone in arrival time)
-        if r_init[i] > r_init[j]:   # v (node i) arrived after l (node j)
-            r_v   = r_init[i]
-            r_l   = beta * r_init[j] + (1.0 - beta) * r_v
-            R_use = R[i]
-        else:                        # l (node j) arrived after v (node i)
-            r_l   = r_init[j]
-            r_v   = beta * r_init[i] + (1.0 - beta) * r_l
-            R_use = R[j]
+    # i_after[k]: node i arrived after node J[k] (larger r_init = later arrival).
+    # The faded radius always pulls the older node toward the younger one's birth
+    # radius, and the threshold is the younger node's R — selected per pair.
+    ri      = r_init[i]
+    rj      = r_init[J]
+    i_after = ri > rj
+    r_v     = np.where(i_after, ri, beta * ri + (1.0 - beta) * rj)
+    r_l     = np.where(i_after, beta * rj + (1.0 - beta) * ri, rj)
+    R_use   = np.where(i_after, R[i], R[J])
 
-        dtheta = angular_sep(theta_v, angles[j])
-        x      = hyperbolic_dist(r_v, r_l, dtheta, zeta)
-        P      = fermi_dirac(x, R_use, zeta_over_2T)
-        P      = np.clip(P, 1e-12, 1.0 - 1e-12)
+    dtheta = angular_sep(theta_v, angles[J])
+    x      = _hyperbolic_dist_vec(r_v, r_l, dtheta, zeta)
+    P      = fermi_dirac(x, R_use, zeta_over_2T)
+    P      = np.clip(P, 1.0e-12, 1.0 - 1.0e-12)
 
-        if node_u in adj[node_v]:
-            logL += np.log(P)
-        else:
-            logL += np.log(1.0 - P)
-
-    return logL
+    is_edge = np.fromiter(
+        (nodes_sorted[j] in adj[node_v] for j in J), dtype=bool, count=J.size
+    )
+    return np.where(is_edge, np.log(P), np.log(1.0 - P)).sum()
 
 
 def _grid_search_angle(
