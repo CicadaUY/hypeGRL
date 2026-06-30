@@ -253,7 +253,7 @@ def fermi_dirac(x: float, R: float, zeta_over_2T: float) -> float:
 # ---------------------------------------------------------------------------
 
 def _cn_integrand(
-    phi: float,
+    phi: np.ndarray,
     *,
     zeta: float,
     zeta_over_2T: float,
@@ -263,19 +263,32 @@ def _cn_integrand(
     rvk1: float, rvk2: float,   # radii for v-k pair
     R_u_k: float,
     R_v_k: float,
-) -> float:
+) -> np.ndarray:
     """
     Integrand for expected common neighbors (toIntegrate::operator() in C++).
-    phi is the angle of the third node k being integrated over.
+
+    Vectorised over ``phi``: ``phi`` is the array of Gauss-Legendre quadrature
+    nodes (the angle of the third node k). The per-pair radii are scalars, so
+    their ``cosh``/``sinh`` are computed once and broadcast over all quadrature
+    points — instead of recomputing four transcendentals per point as the
+    scalar ``hyperbolic_dist`` did. Mathematically identical to evaluating the
+    scalar integrand at each node.
     """
-    dtheta_v = angular_sep(phi, theta_v)
-    dtheta_u = angular_sep(phi, theta_u)
+    phi = np.asarray(phi, dtype=np.float64)
+    dtheta_v = np.pi - np.abs(np.pi - np.abs(phi - theta_v))
+    dtheta_u = np.pi - np.abs(np.pi - np.abs(phi - theta_u))
 
-    x_v = hyperbolic_dist(rvk1, rvk2, dtheta_v, zeta)
-    x_u = hyperbolic_dist(ruk1, ruk2, dtheta_u, zeta)
+    x_v = (1.0 / zeta) * np.arccosh(
+        np.cosh(zeta * rvk1) * np.cosh(zeta * rvk2)
+        - np.sinh(zeta * rvk1) * np.sinh(zeta * rvk2) * np.cos(dtheta_v)
+    )
+    x_u = (1.0 / zeta) * np.arccosh(
+        np.cosh(zeta * ruk1) * np.cosh(zeta * ruk2)
+        - np.sinh(zeta * ruk1) * np.sinh(zeta * ruk2) * np.cos(dtheta_u)
+    )
 
-    p_v = fermi_dirac(x_v, R_v_k, zeta_over_2T)
-    p_u = fermi_dirac(x_u, R_u_k, zeta_over_2T)
+    p_v = 1.0 / (1.0 + np.exp(zeta_over_2T * (x_v - R_v_k)))
+    p_u = 1.0 / (1.0 + np.exp(zeta_over_2T * (x_u - R_u_k)))
     return p_v * p_u
 
 
@@ -331,19 +344,18 @@ def expected_common_neighbors(
             R_u_k = R[j]
             ruk1  = beta * r_l + (1.0 - beta) * r_init[j]
 
-        # 48-point Gauss-Legendre integration over phi in [0, 2*pi]
+        # 48-point Gauss-Legendre integration over phi in [0, 2*pi].
+        # The integrand is vectorised, so fixed_quad evaluates all n_quad
+        # nodes in a single NumPy call rather than one Python call per node.
         prob, _ = fixed_quad(
-            lambda phi: np.array([
-                _cn_integrand(
-                    p,
-                    zeta=zeta, zeta_over_2T=zeta_over_2T,
-                    theta_u=theta_u, theta_v=theta_v,
-                    ruk1=ruk1, ruk2=ruk2,
-                    rvk1=rvk1, rvk2=rvk2,
-                    R_u_k=R_u_k, R_v_k=R_v_k,
-                )
-                for p in np.atleast_1d(phi)
-            ]),
+            lambda phi: _cn_integrand(
+                phi,
+                zeta=zeta, zeta_over_2T=zeta_over_2T,
+                theta_u=theta_u, theta_v=theta_v,
+                ruk1=ruk1, ruk2=ruk2,
+                rvk1=rvk1, rvk2=rvk2,
+                R_u_k=R_u_k, R_v_k=R_v_k,
+            ),
             0.0, 2.0 * np.pi,
             n=n_quad,
         )
