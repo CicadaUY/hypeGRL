@@ -475,28 +475,41 @@ def fd_loglikelihood(
     nodes2compare: indices of nodes to compare against.
                    If None, uses all earlier nodes (0..i-1).
 
-    Vectorized over the comparison nodes: one ``(M,)`` array of distances /
-    probabilities instead of a Python loop of scalar calls. The math is
-    element-wise identical to the scalar path (see :func:`_hyperbolic_dist_vec`);
-    only the summation order changes, which can shift the total by a last ULP.
+    The body below is a vectorized form of this readable scalar loop (kept as a
+    comment because it reads like the paper); the two are element-wise identical,
+    only the summation order differs (a last-ULP effect):
+
+        logL = 0.0
+        for j in compare:
+            if not is_here[j]:
+                continue                          # node j not placed yet
+            node_u = nodes_sorted[j]
+            dtheta = angular_sep(theta_v, angles[j])
+            x      = hyperbolic_dist(r_final[i], r_final[j], dtheta, zeta)
+            P      = fermi_dirac(x, R[i], zeta_over_2T)   # connection prob.
+            P      = np.clip(P, 1e-12, 1 - 1e-12)
+            logL  += np.log(P) if node_u in adj[node_v] else np.log(1 - P)
+        return logL
     """
     zeta         = params["zeta"]
     zeta_over_2T = zeta / (2.0 * params["T"])
     node_v       = nodes_sorted[i]
     compare      = nodes2compare if nodes2compare is not None else range(i)
 
-    # Comparison nodes that are already placed in the embedding.
+    # J = the loop's comparison nodes that are already placed (the `if is_here`).
     J = np.fromiter((j for j in compare if is_here[j]), dtype=np.intp)
     if J.size == 0:
         return 0.0
 
-    # node i is the youngest here, so every pair uses its threshold R[i].
+    # The loop body, once per j, done for all J at once. node i is the youngest
+    # here, so every pair uses its threshold R[i].
     dtheta = angular_sep(theta_v, angles[J])
     x      = _hyperbolic_dist_vec(r_final[i], r_final[J], dtheta, zeta)
     P      = fermi_dirac(x, R[i], zeta_over_2T)
     P      = np.clip(P, 1e-12, 1.0 - 1e-12)
 
-    # Edge -> log P ; non-edge -> log(1 - P).
+    # is_edge replaces the `if node_u in adj[node_v]` branch: edge -> log P,
+    # non-edge -> log(1 - P); the sum is the loop's `logL +=` accumulation.
     is_edge = np.fromiter(
         (nodes_sorted[j] in adj[node_v] for j in J), dtype=bool, count=J.size
     )
@@ -522,8 +535,24 @@ def fd_loglikelihood_correction(
     every (v, l) pair based on who arrived later (larger r_init = later arrival),
     and uses R of the later-arriving node — matching C++ lines 451-468.
 
-    Vectorized over the comparison nodes: the per-pair "who arrived later" branch
-    becomes an ``np.where`` mask, element-wise identical to the scalar loop.
+    The body below is a vectorized form of this readable scalar loop (kept as a
+    comment); the per-pair "who arrived later" branch becomes an ``np.where``
+    mask, element-wise identical to the loop:
+
+        logL = 0.0
+        for j in nodes2compare:
+            if j == i:
+                continue
+            node_u = nodes_sorted[j]
+            if r_init[i] > r_init[j]:        # node i younger -> fade j, use R[i]
+                r_v, r_l, R_use = r_init[i], beta*r_init[j] + (1-beta)*r_init[i], R[i]
+            else:                            # node j younger -> fade i, use R[j]
+                r_v, r_l, R_use = beta*r_init[i] + (1-beta)*r_init[j], r_init[j], R[j]
+            dtheta = angular_sep(theta_v, angles[j])
+            x      = hyperbolic_dist(r_v, r_l, dtheta, zeta)
+            P      = np.clip(fermi_dirac(x, R_use, zeta_over_2T), 1e-12, 1 - 1e-12)
+            logL  += np.log(P) if node_u in adj[node_v] else np.log(1 - P)
+        return logL
     """
     zeta         = params["zeta"]
     beta         = params["beta"]
@@ -534,9 +563,10 @@ def fd_loglikelihood_correction(
     if J.size == 0:
         return 0.0
 
-    # i_after[k]: node i arrived after node J[k] (larger r_init = later arrival).
-    # The faded radius always pulls the older node toward the younger one's birth
-    # radius, and the threshold is the younger node's R — selected per pair.
+    # The loop's if/else, vectorized: i_after[k] is True where node i arrived
+    # after node J[k] (larger r_init = later arrival). The faded radius pulls the
+    # older node toward the younger one's birth radius; R_use is the younger
+    # node's threshold — picked per pair.
     ri      = r_init[i]
     rj      = r_init[J]
     i_after = ri > rj
@@ -544,11 +574,13 @@ def fd_loglikelihood_correction(
     r_l     = np.where(i_after, beta * rj + (1.0 - beta) * ri, rj)
     R_use   = np.where(i_after, R[i], R[J])
 
+    # The rest of the loop body, done for all J at once.
     dtheta = angular_sep(theta_v, angles[J])
     x      = _hyperbolic_dist_vec(r_v, r_l, dtheta, zeta)
     P      = fermi_dirac(x, R_use, zeta_over_2T)
     P      = np.clip(P, 1.0e-12, 1.0 - 1.0e-12)
 
+    # edge -> log P, non-edge -> log(1 - P); sum = the loop's `logL +=`.
     is_edge = np.fromiter(
         (nodes_sorted[j] in adj[node_v] for j in J), dtype=bool, count=J.size
     )
