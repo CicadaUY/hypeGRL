@@ -27,11 +27,18 @@ converted to the Poincare disk by the caller.
 from __future__ import annotations
 
 import warnings
+from functools import lru_cache
 from typing import Optional
 
 import networkx as nx
 import numpy as np
-from scipy.integrate import fixed_quad
+from scipy.special import roots_legendre
+
+
+@lru_cache(maxsize=None)
+def _gauss_legendre(n: int) -> tuple[np.ndarray, np.ndarray]:
+    """Cached Gauss-Legendre nodes/weights on [-1, 1] (same as scipy uses)."""
+    return roots_legendre(n)
 
 
 # ---------------------------------------------------------------------------
@@ -252,44 +259,52 @@ def fermi_dirac(x: float, R: float, zeta_over_2T: float) -> float:
 # Phase 1: common-neighbors log-likelihood
 # ---------------------------------------------------------------------------
 
-def _cn_integrand(
-    phi: np.ndarray,
-    *,
+def _pair_terms(
+    a: int,
+    r_init: np.ndarray,
+    R: np.ndarray,
+    beta: float,
     zeta: float,
-    zeta_over_2T: float,
-    theta_u: float,
-    theta_v: float,
-    ruk1: float, ruk2: float,   # radii for u-k pair
-    rvk1: float, rvk2: float,   # radii for v-k pair
-    R_u_k: float,
-    R_v_k: float,
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Integrand for expected common neighbors (toIntegrate::operator() in C++).
+    Precompute the angle-independent ``cosh``/``sinh`` products for the
+    ``(a, k)`` pair, for every node ``k``, plus the pair threshold ``R_{ak}``.
 
-    Vectorised over ``phi``: ``phi`` is the array of Gauss-Legendre quadrature
-    nodes (the angle of the third node k). The per-pair radii are scalars, so
-    their ``cosh``/``sinh`` are computed once and broadcast over all quadrature
-    points — instead of recomputing four transcendentals per point as the
-    scalar ``hyperbolic_dist`` did. Mathematically identical to evaluating the
-    scalar integrand at each node.
+    The hyperbolic distance in the CN integrand is
+    ``x = (1/zeta) arccosh(A - B cos(dtheta))`` with
+
+        A = cosh(zeta r1) cosh(zeta r2),   B = sinh(zeta r1) sinh(zeta r2),
+
+    where ``r1`` is the older node faded to the younger node's birth radius and
+    ``r2`` the younger node's birth radius. ``A``, ``B`` and ``R_{ak}`` depend
+    only on radii, not on any angle, so they are computed **once** here and
+    reused across the entire angular grid search and all quadrature points —
+    the per-node ``sinh``/``cosh`` caching the C++ does via
+    ``Node::rinit_sinh``/``rinit_cosh``.
+
+    Returns ``(A, B, R_ak)``, each of shape ``(N,)`` indexed by ``k``.
     """
-    phi = np.asarray(phi, dtype=np.float64)
-    dtheta_v = np.pi - np.abs(np.pi - np.abs(phi - theta_v))
-    dtheta_u = np.pi - np.abs(np.pi - np.abs(phi - theta_u))
+    # Larger birth radius => later arrival, so younger_k[k] flags the nodes k
+    # that are younger than a. The whole branch is done per-k with np.where.
+    r_a            = r_init[a]
+    one_minus_beta = 1.0 - beta
+    younger_k      = r_init > r_a            # node k born after node a?
 
-    x_v = (1.0 / zeta) * np.arccosh(
-        np.cosh(zeta * rvk1) * np.cosh(zeta * rvk2)
-        - np.sinh(zeta * rvk1) * np.sinh(zeta * rvk2) * np.cos(dtheta_v)
+    # r1 = older node's radius, faded to the younger node's birth time;
+    # r2 = younger node's own birth radius; R_ak = younger node's threshold.
+    r1 = np.where(
+        younger_k,
+        beta * r_a + one_minus_beta * r_init,     # k younger: fade a to k's birth
+        beta * r_init + one_minus_beta * r_a,     # a younger: fade k to a's birth
     )
-    x_u = (1.0 / zeta) * np.arccosh(
-        np.cosh(zeta * ruk1) * np.cosh(zeta * ruk2)
-        - np.sinh(zeta * ruk1) * np.sinh(zeta * ruk2) * np.cos(dtheta_u)
-    )
+    r2   = np.where(younger_k, r_init, r_a)
+    R_ak = np.where(younger_k, R, R[a])
 
-    p_v = 1.0 / (1.0 + np.exp(zeta_over_2T * (x_v - R_v_k)))
-    p_u = 1.0 / (1.0 + np.exp(zeta_over_2T * (x_u - R_u_k)))
-    return p_v * p_u
+    # A, B are the radius-only parts of cosh(zeta*x) = A - B*cos(dtheta); since
+    # they hold no angle, they are computed once here and reused for every angle.
+    A = np.cosh(zeta * r1) * np.cosh(zeta * r2)
+    B = np.sinh(zeta * r1) * np.sinh(zeta * r2)
+    return A, B, R_ak
 
 
 def expected_common_neighbors(
@@ -297,8 +312,7 @@ def expected_common_neighbors(
     j: int,
     theta_v: float,
     *,
-    r_init: np.ndarray,
-    R: np.ndarray,
+    cn_terms: dict,
     angles: np.ndarray,
     params: dict,
     n_quad: int = 48,
@@ -307,62 +321,59 @@ def expected_common_neighbors(
     Compute expected (lambda) and variance of common neighbors between
     node i (being placed at theta_v) and already-placed node j.
 
+    ``cn_terms[a]`` holds the precomputed ``(A, B, R_ak)`` arrays for anchor
+    node ``a`` against every ``k`` (see :func:`_pair_terms`).
+
+    The 48-point Gauss-Legendre integral is evaluated for **all** third nodes
+    ``k`` at once: the integrand is a single ``(N, n_quad)`` NumPy array, and the
+    quadrature contraction is one matrix reduction — instead of one
+    ``fixed_quad`` call per ``k``. The arithmetic mirrors ``scipy``'s
+    ``fixed_quad`` (same nodes/weights and node mapping), so the result is
+    numerically identical to the per-``k`` version.
+
     Returns (lambda, variance).
     """
     N            = params["N"]
     zeta         = params["zeta"]
-    beta         = params["beta"]
     zeta_over_2T = zeta / (2.0 * params["T"])
     theta_u      = angles[j]
 
-    lam = 0.0
-    var = 0.0
+    A_v, B_v, R_v = cn_terms[i]   # (i, k) cached terms, arrays over k
+    A_u, B_u, R_u = cn_terms[j]   # (j, k) cached terms, arrays over k
 
-    for k in range(N):
-        if k == i or k == j:
-            continue
+    # Quadrature nodes mapped from [-1, 1] to [0, 2*pi] exactly as fixed_quad
+    # does (w are the matching weights); phi has shape (Q=n_quad,).
+    x_roots, w = _gauss_legendre(n_quad)
+    a_lo, b_hi = 0.0, 2.0 * np.pi
+    phi = (b_hi - a_lo) * (x_roots + 1.0) / 2.0 + a_lo        # (Q,)
 
-        r_l = r_init[k]
+    # Angular separation of the third node (at phi) from v and from u, per node.
+    dtheta_v = np.pi - np.abs(np.pi - np.abs(phi - theta_v))  # (Q,)
+    dtheta_u = np.pi - np.abs(np.pi - np.abs(phi - theta_u))  # (Q,)
+    cos_dv = np.cos(dtheta_v)
+    cos_du = np.cos(dtheta_u)
 
-        # Determine radii for (v, k) pair — who arrived later?
-        if r_l > r_init[i]:   # k arrived after v
-            rvk2 = r_l
-            R_v_k = R[k]
-            rvk1  = beta * r_init[i] + (1.0 - beta) * r_l
-        else:                  # v arrived after k
-            rvk2  = r_init[i]
-            R_v_k = R[i]
-            rvk1  = beta * r_l + (1.0 - beta) * r_init[i]
+    # Connection probability at every (node k, quadrature node phi). The cached
+    # per-pair terms are column vectors over k (``[:, None]``) and the angle
+    # terms are row vectors over phi (``[None, :]``); broadcasting them gives
+    # (N, Q) arrays in one shot. arccosh(A - B cos(dtheta)) = zeta * distance.
+    x_v = (1.0 / zeta) * np.arccosh(A_v[:, None] - B_v[:, None] * cos_dv[None, :])
+    x_u = (1.0 / zeta) * np.arccosh(A_u[:, None] - B_u[:, None] * cos_du[None, :])
+    p_v = 1.0 / (1.0 + np.exp(zeta_over_2T * (x_v - R_v[:, None])))
+    p_u = 1.0 / (1.0 + np.exp(zeta_over_2T * (x_u - R_u[:, None])))
+    integ = p_v * p_u                                          # (N, Q)
 
-        # Determine radii for (u, k) pair
-        if r_l > r_init[j]:   # k arrived after u
-            ruk2  = r_l
-            R_u_k = R[k]
-            ruk1  = beta * r_init[j] + (1.0 - beta) * r_l
-        else:                  # u arrived after k
-            ruk2  = r_init[j]
-            R_u_k = R[j]
-            ruk1  = beta * r_l + (1.0 - beta) * r_init[j]
+    # Quadrature: integral over phi = (b-a)/2 * sum_q w_q f_q, contracting the
+    # Q axis for all k at once; then the 1/(2*pi) normalisation (C++ line 221).
+    prob = (b_hi - a_lo) / 2.0 * (integ * w[None, :]).sum(axis=-1)   # (N,)
+    prob /= (2.0 * np.pi)
 
-        # 48-point Gauss-Legendre integration over phi in [0, 2*pi].
-        # The integrand is vectorised, so fixed_quad evaluates all n_quad
-        # nodes in a single NumPy call rather than one Python call per node.
-        prob, _ = fixed_quad(
-            lambda phi: _cn_integrand(
-                phi,
-                zeta=zeta, zeta_over_2T=zeta_over_2T,
-                theta_u=theta_u, theta_v=theta_v,
-                ruk1=ruk1, ruk2=ruk2,
-                rvk1=rvk1, rvk2=rvk2,
-                R_u_k=R_u_k, R_v_k=R_v_k,
-            ),
-            0.0, 2.0 * np.pi,
-            n=n_quad,
-        )
-        prob /= (2.0 * np.pi)   # normalize (C++ line 221)
-        lam += prob
-        var += prob * (1.0 - prob)
+    # A node is never its own common neighbor: drop k == i and k == j.
+    prob[i] = 0.0
+    prob[j] = 0.0
 
+    lam = prob.sum()
+    var = (prob * (1.0 - prob)).sum()
     return lam, var
 
 
@@ -370,8 +381,7 @@ def cn_loglikelihood(
     i: int,
     theta_v: float,
     *,
-    r_init: np.ndarray,
-    R: np.ndarray,
+    cn_terms: dict,
     angles: np.ndarray,
     adj: dict,
     nodes_sorted: list,
@@ -380,6 +390,9 @@ def cn_loglikelihood(
     """
     Log-likelihood for node i placed at theta_v, Phase 1 (CN-based).
     Sums Gaussian log-likelihoods of empirical vs expected CN counts.
+
+    ``cn_terms`` carries the precomputed per-pair ``cosh``/``sinh`` terms (see
+    :func:`_pair_terms`), reused across all candidate angles.
     """
     logL = 0.0
     node_v = nodes_sorted[i]
@@ -392,7 +405,7 @@ def cn_loglikelihood(
 
         lam, var = expected_common_neighbors(
             i, j, theta_v,
-            r_init=r_init, R=R, angles=angles, params=params,
+            cn_terms=cn_terms, angles=angles, params=params,
         )
 
         if var < 1e-12:
@@ -605,6 +618,14 @@ def hypermap_init(
         print(f"N={N}, numCN={num_cn}, kbar={kbar:.2f}, "
               f"beta={params['beta']:.4f}, T={T}, zeta={zeta}")
 
+    # Precompute the angle-independent cosh/sinh products for every CN anchor.
+    # The nodes that appear as i or j in Phase 1 are exactly 0..num_cn-1, each
+    # against all k; these terms are reused across the whole angular grid search.
+    cn_terms = {
+        a: _pair_terms(a, r_init, R, params["beta"], zeta)
+        for a in range(num_cn)
+    }
+
     # ── Phase 1: common-neighbors ─────────────────────────────────────────
     for i in range(num_cn):
         is_here[i] = True
@@ -622,7 +643,7 @@ def hypermap_init(
         def logL_cn(theta_v, _i=i):
             return cn_loglikelihood(
                 _i, theta_v,
-                r_init=r_init, R=R, angles=angles,
+                cn_terms=cn_terms, angles=angles,
                 adj=adj, nodes_sorted=nodes_sorted, params=params,
             )
 
