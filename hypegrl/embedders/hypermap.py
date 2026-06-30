@@ -88,7 +88,7 @@ def estimate_gamma(G, k_min=1):
 def fermi_dirac_nll(
     X: torch.Tensor,
     A: torch.Tensor,
-    R: float,
+    R,
     zeta_over_2T: float,
     manifold: geoopt.Manifold = POINCARE_BALL,
     eps: float = 1e-12,
@@ -102,11 +102,15 @@ def fermi_dirac_nll(
             A_{ij} \\log P_{ij} + (1 - A_{ij}) \\log(1 - P_{ij})
         \\right]
 
-    where :math:`P_{ij} = 1/(1+exp(\\zeta/(2T)(x_{ij} - R)))` and
-    :math:`x_{ij}` is the Hyperbolic distance. 
+    where :math:`P_{ij} = 1/(1+exp(\\zeta/(2T)(x_{ij} - R_{ij})))` and
+    :math:`x_{ij}` is the hyperbolic distance.
 
-    The threshold :math:`R` is modified over the initial embedding, and 
-    the last value provided by that algorithm should be used.
+    The threshold :math:`R_{ij}` is **per node**, not global: in the model each
+    link forms at the birth time of its *younger* endpoint, so the pair uses
+    that node's threshold (Eqs. 1, 5-8 in Papadopoulos et al.). Rows are
+    degree-descending, so the younger node of a pair is the one with the larger
+    index, i.e. :math:`R_{ij} = R_{\\max(i, j)}` — matching ``decode()`` and the
+    greedy initialisation.
 
     Parameters
     ----------
@@ -115,11 +119,14 @@ def fermi_dirac_nll(
     A:
         ``(N, N)`` adjacency matrix.
     R:
-        float indicating the threhold in the probability formula.
+        Per-node thresholds. A ``(N,)`` array/tensor is interpreted as the
+        per-node :math:`R_i` and expanded to the per-pair matrix
+        :math:`R_{\\max(i, j)}`. A scalar is broadcast as a single global
+        threshold (legacy behaviour, kept for convenience).
     zeta_over_2T:
         Fixed scalar :math:`\\zeta / (2T)`.
     manifold:
-        A geoopt.Manifold indicating where the embeddings live. 
+        A geoopt.Manifold indicating where the embeddings live.
     eps:
         Numerical floor for log arguments.
 
@@ -131,7 +138,15 @@ def fermi_dirac_nll(
 
     N   = X.shape[0]
 
-    P = torch.sigmoid(zeta_over_2T * (R-D))
+    R_t = torch.as_tensor(R, dtype=X.dtype, device=X.device)
+    if R_t.ndim == 0:
+        R_pair = R_t                       # scalar: single global threshold
+    else:
+        # per-pair threshold = younger node's R = R[max(i, j)]
+        idx    = torch.arange(N, device=X.device)
+        R_pair = R_t[torch.maximum(idx.unsqueeze(1), idx.unsqueeze(0))]
+
+    P = torch.sigmoid(zeta_over_2T * (R_pair - D))
     P = torch.clamp(P, eps, 1.0 - eps)
 
     mask = torch.triu(
@@ -412,12 +427,27 @@ class HyperMapEmbedder(HyperbolicEmbedder):
             self._loss_history = []
             return self
 
+        # joint_optimize builds the adjacency from the graph in its node-iteration
+        # order, but X_init, self._R and the returned embeddings are all in
+        # degree-descending (nodes_sorted) order. Reorder the graph so the
+        # adjacency rows line up with the embedding rows (and with the per-node
+        # thresholds in self._R); otherwise the loss pairs each hyperbolic
+        # distance with the wrong adjacency entry. unknown_edges are remapped to
+        # the same order; their list order (and hence a_omega alignment) is kept.
+        order = {node: idx for idx, node in enumerate(self._nodes_sorted)}
+        G_sorted = nx.Graph()
+        G_sorted.add_nodes_from(range(len(self._nodes_sorted)))
+        G_sorted.add_edges_from(
+            (order[u], order[v], data) for u, v, data in G.edges(data=True)
+        )
+        unknown_sorted = [(order[u], order[v]) for (u, v) in unknown_edges]
+
         result = joint_optimize(
-            G           = G,
+            G           = G_sorted,
             loss_fn     = self.distance,
             X_init      = X_init,
             manifold    = POINCARE_BALL,
-            unknown_edges   = unknown_edges,
+            unknown_edges   = unknown_sorted,
             a_omega_init    = a_omega_init,
             lr_X         = self.lr_X,
             lr_a         = self.lr_a,
@@ -437,10 +467,12 @@ class HyperMapEmbedder(HyperbolicEmbedder):
         return self
 
     def distance(self, X: torch.Tensor, A: torch.Tensor) -> torch.Tensor:
+        # Per-node thresholds R_i (Eq. 3): the loss uses the younger node's R
+        # for each pair, consistent with the greedy init and decode().
         return fermi_dirac_nll(
             X,
             A,
-            self._R[-1],
+            self._R,
             self.zeta / (2.0 * self.T),
             POINCARE_BALL
         )
@@ -491,7 +523,11 @@ class HyperMapEmbedder(HyperbolicEmbedder):
         D        = POINCARE_BALL.dist(X_t.unsqueeze(1), X_t.unsqueeze(0))
         N        = X.shape[0]
         idx      = torch.arange(N)
-        R_pair   = R_t[torch.minimum(idx.unsqueeze(1), idx.unsqueeze(0))]
+        # Rows are degree-descending, so the larger index is the node that
+        # appeared later ("younger"). The pairwise connection probability uses
+        # the younger node's threshold R (Eqs. 1, 5-8 in Papadopoulos et al.):
+        # each link forms at the birth time of its younger endpoint.
+        R_pair   = R_t[torch.maximum(idx.unsqueeze(1), idx.unsqueeze(0))]
         P        = torch.sigmoid(
             -(self.zeta / (2.0 * self.T)) * (D - R_pair)
         )
