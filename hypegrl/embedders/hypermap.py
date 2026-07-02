@@ -62,8 +62,6 @@ from hypegrl.inference.joint_optimizer import (
 )
 from hypegrl.embedders._hypermap_init import hypermap_init, assign_radii
 from hypegrl.inference.joint_optimizer import joint_optimize
-# estimate_gamma lives in inference.parameters (shared graph-parameter estimators);
-# re-exported here so `from hypegrl.embedders.hypermap import estimate_gamma` still works.
 from hypegrl.inference.parameters import estimate_gamma
 
 

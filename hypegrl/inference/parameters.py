@@ -117,7 +117,7 @@ def estimate_gamma(G: nx.Graph, k_min: int | None = None, min_tail: int = 10):
 
     - ``k_min=None`` (default) selects it automatically by KS minimisation
       (:func:`choose_kmin_ks`).
-    - passing an explicit integer uses that cutoff directly (previous behaviour).
+    - passing an explicit integer uses that cutoff directly.
 
     On graphs too small to select a cutoff (fewer than ``min_tail`` tail nodes),
     it falls back to ``k_min=1`` with a warning — the exponent is then biased and
@@ -127,7 +127,7 @@ def estimate_gamma(G: nx.Graph, k_min: int | None = None, min_tail: int = 10):
     -------
     (gamma_hat, tail_degrees):
         the estimated exponent and the degrees actually used in the fit (those
-        ``>= k_min``), for backward compatibility with the previous signature.
+        ``>= k_min``).
     """
     degrees = np.array([deg for _, deg in G.degree()], dtype=float)
     degrees = degrees[degrees >= 1]

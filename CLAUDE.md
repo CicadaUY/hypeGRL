@@ -91,7 +91,7 @@ Decision rule for what belongs here:
 - **Does *not* belong here:** estimating the *unknown adjacency entries* `a_Ω` (that is `imputation.py`), solving for embeddings (`joint_optimizer.py` / `riemannian_optimizer.py`), or anything specific to one embedder's warm-start pipeline (e.g. the greedy init in `_hypermap_init.py`, the κ/β inference baked into `_dmercator_init.py`).
 
 Current contents:
-- `estimate_gamma(G, k_min=None)` — discrete power-law MLE (Clauset–Shalizi–Newman, arXiv:0706.1062, §3.2). `k_min=None` (default) selects the cutoff automatically by KS minimisation; an explicit integer uses that cutoff directly. Re-exported from `embedders/hypermap.py` for backward compatibility.
+- `estimate_gamma(G, k_min=None)` — discrete power-law MLE (Clauset–Shalizi–Newman, arXiv:0706.1062, §3.2). `k_min=None` (default) selects the cutoff automatically by KS minimisation; an explicit integer uses that cutoff directly. Also importable as `hypegrl.embedders.hypermap.estimate_gamma`.
 - `choose_kmin_ks(degrees, min_tail=10)` — CSN §3.3 KS-minimising choice of the cutoff; returns `{k_min, gamma, ks, n_tail}` (large `ks` ⇒ the degree distribution is not really a power law, e.g. a tree), or `None` when the tail is too small to trust.
 
 Planned: `estimate_temperature` (clustering matching) will land here; that is where it would share logic with `_dmercator_init.py`'s existing `infer_kappa_and_beta` / `_expected_clustering` (the S¹ inverse-temperature β ≈ 1/T) if we later consolidate.
