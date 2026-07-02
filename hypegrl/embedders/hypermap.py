@@ -62,24 +62,10 @@ from hypegrl.inference.joint_optimizer import (
 )
 from hypegrl.embedders._hypermap_init import hypermap_init, assign_radii
 from hypegrl.inference.joint_optimizer import joint_optimize
+# estimate_gamma lives in inference.parameters (shared graph-parameter estimators);
+# re-exported here so `from hypegrl.embedders.hypermap import estimate_gamma` still works.
+from hypegrl.inference.parameters import estimate_gamma
 
-
-def estimate_gamma(G, k_min=1):
-    """
-    Estimates the power-law exponent of a certain graph's degree distribution. Based on https://arxiv.org/pdf/0706.1062.
-    k_min is the minimum degree after which we assume that the degree distribution is power-law
-    """
-    degrees = np.array([deg for _, deg in G.degree()])
-    degrees = degrees[degrees >= k_min]
-
-    if len(degrees) == 0:
-        raise ValueError("No degrees >= k_min")
-
-    n = len(degrees)
-    # see Eq. 3.7 of https://arxiv.org/pdf/0706.1062. This is a reasonably good estimate, 
-    # although if x_min<6 it should not provide accurate results.
-    gamma_hat = 1 + n / np.sum(np.log(degrees / (k_min - 0.5)))
-    return gamma_hat, degrees
 
 # ---------------------------------------------------------------------------
 # Fermi-Dirac loss (autograd-compatible, arbitrary d)
@@ -389,9 +375,9 @@ class HyperMapEmbedder(HyperbolicEmbedder):
         self._G             = G
         self._unknown_edges = unknown_edges
 
-        # estimate gamma if necessary
+        # estimate gamma if necessary (k_min chosen automatically by KS minimisation)
         if self.gamma is None:
-            self.gamma, _ = estimate_gamma(G, k_min=3)
+            self.gamma, _ = estimate_gamma(G)
 
         # ── Stage 1: greedy initialization (always 2D) ───────────────────
         # Run when X_init is not provided or on the first call (no cached

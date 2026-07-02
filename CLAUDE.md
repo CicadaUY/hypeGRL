@@ -82,6 +82,20 @@ Stubs exist for `lorentz.py`, `ase.py`, `out_of_sample.py`.
 - `compute_results_imputation_unweighted(G, unknown_edges, a_omega)` — evaluation helper returning actual vs. predicted dicts for unweighted graphs
 - `compute_threshold_two_clusters(G, X, unknown_edges, manifold)` — distance-based threshold from embedding geometry
 
+### Parameter estimation (`hypegrl/inference/parameters.py`)
+
+**Scope / where estimators go.** This module is the single home for estimating the **scalar hyperparameters of the latent-geometry model** from an observed graph — the quantities a method needs *before* it embeds (e.g. HyperMap / E-PSO's `(m, L, γ, T, ζ)`). It is deliberately method-agnostic and imports no embedders, so any method can reuse it.
+
+Decision rule for what belongs here:
+- **Belongs here:** anything that maps a graph (or its degree sequence / clustering) to a scalar model parameter — `γ` (power-law exponent), `k_min` (power-law cutoff), and, when added, `T` (temperature, via clustering matching) and the `m`/`L` average-degree heuristics.
+- **Does *not* belong here:** estimating the *unknown adjacency entries* `a_Ω` (that is `imputation.py`), solving for embeddings (`joint_optimizer.py` / `riemannian_optimizer.py`), or anything specific to one embedder's warm-start pipeline (e.g. the greedy init in `_hypermap_init.py`, the κ/β inference baked into `_dmercator_init.py`).
+
+Current contents:
+- `estimate_gamma(G, k_min=None)` — discrete power-law MLE (Clauset–Shalizi–Newman, arXiv:0706.1062, §3.2). `k_min=None` (default) selects the cutoff automatically by KS minimisation; an explicit integer uses that cutoff directly. Re-exported from `embedders/hypermap.py` for backward compatibility.
+- `choose_kmin_ks(degrees, min_tail=10)` — CSN §3.3 KS-minimising choice of the cutoff; returns `{k_min, gamma, ks, n_tail}` (large `ks` ⇒ the degree distribution is not really a power law, e.g. a tree), or `None` when the tail is too small to trust.
+
+Planned: `estimate_temperature` (clustering matching) will land here; that is where it would share logic with `_dmercator_init.py`'s existing `infer_kappa_and_beta` / `_expected_clustering` (the S¹ inverse-temperature β ≈ 1/T) if we later consolidate.
+
 ### Generation and streaming (partial)
 
 - `hypegrl/generation/` — `GraphGenerator` ABC + stub implementations (`fermi_dirac.py`, `rdpg.py`, `threshold.py`)
