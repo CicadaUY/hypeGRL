@@ -1,7 +1,6 @@
 """Estimate scalar parameters of the latent-geometry model from an observed graph.
 
-Scope (the rule for what lives here — see ``CLAUDE.md`` for the canonical
-statement): this module is the single, method-agnostic home for estimating the
+Scope: this module is the single, method-agnostic home for estimating the
 **scalar hyperparameters** a method needs *before* it embeds — e.g. HyperMap /
 E-PSO's ``(m, L, gamma, T, zeta)``. It imports no embedders so any method can
 reuse it. It does *not* estimate the unknown adjacency *entries* ``a_Omega``
