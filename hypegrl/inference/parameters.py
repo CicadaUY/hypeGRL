@@ -7,23 +7,14 @@ reuse it. It does *not* estimate the unknown adjacency *entries* ``a_Omega``
 (that is ``imputation.py``), solve for embeddings (the optimizers), or hold any
 one embedder's warm-start logic (e.g. ``_hypermap_init.py``, ``_dmercator_init``).
 
-Right now this covers the power-law exponent ``gamma`` of the degree
-distribution together with an automatic choice of its lower cutoff ``k_min``,
-and a bootstrap goodness-of-fit test for the power-law hypothesis
-(:func:`power_law_gof`).
-
-Both follow Clauset, Shalizi & Newman, "Power-law distributions in empirical
-data", SIAM Review 51, 661 (2009), arXiv:0706.1062:
-
-- the discrete maximum-likelihood estimator of the exponent (their Eq. 3.7,
-  Section 3.2), and
-- the choice of the lower cutoff ``x_min`` by Kolmogorov-Smirnov minimisation
-  (Section 3.3).
-
-This is the intended home for the other E-PSO / HyperMap parameters too: the
-temperature ``T`` (via clustering matching) and the ``m`` / ``L`` average-degree
-heuristics, so that all of ``(m, L, gamma, T, zeta)`` can be inferred in one
-place rather than inside a specific embedder.
+Each estimator documents its own method and source in its own docstring. So far
+this covers the power-law exponent ``gamma`` of the degree distribution with an
+automatic choice of the lower cutoff ``k_min`` (:func:`estimate_gamma`,
+:func:`choose_kmin_ks`) and a goodness-of-fit test for the power-law hypothesis
+(:func:`power_law_gof`). It is the intended home for the remaining E-PSO /
+HyperMap parameters too — the temperature ``T`` (via clustering matching) and the
+``m`` / ``L`` average-degree heuristics — so that all of ``(m, L, gamma, T,
+zeta)`` are inferred in one place rather than inside a specific embedder.
 """
 
 from __future__ import annotations
@@ -43,6 +34,8 @@ DEFAULT_GAMMA = 2.5
 def _gamma_mle(tail_degrees: np.ndarray, k_min: float) -> float:
     """Discrete power-law MLE for the exponent (CSN Eq. 3.7).
 
+    CSN = Clauset, Shalizi & Newman, "Power-law distributions in empirical data",
+    SIAM Review 51, 661 (2009), arXiv:0706.1062 (the shorthand is reused below).
     ``tail_degrees`` are the degrees ``>= k_min``. The ``- 0.5`` is CSN's
     continuity correction for discrete (integer) data.
     """
@@ -206,7 +199,8 @@ def power_law_gof(degrees, n_bootstrap: int = 1000, seed=None) -> dict | None:
     the exponent is (:func:`estimate_gamma`). Run it deliberately; it is never
     invoked automatically.
 
-    Method (semiparametric bootstrap, Clauset-Shalizi-Newman §4):
+    Method (semiparametric bootstrap; Clauset, Shalizi & Newman, arXiv:0706.1062,
+    §4):
 
     1. Fit the data → ``(k_min, gamma, D)`` via :func:`choose_kmin_ks` (``D`` is the
        observed KS distance).
