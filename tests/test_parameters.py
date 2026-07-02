@@ -16,6 +16,7 @@ from hypegrl.inference.parameters import (
     _gamma_mle,
     choose_kmin_ks,
     estimate_gamma,
+    power_law_gof,
 )
 
 
@@ -79,12 +80,20 @@ def test_estimate_gamma_auto_on_scale_free_graph():
     assert tail.min() >= 1
 
 
-def test_estimate_gamma_falls_back_with_warning_when_cutoff_undefined():
-    """Too few distinct degrees to select a cutoff -> warn and fall back to k_min=1."""
+def test_estimate_gamma_falls_back_to_default_with_warning():
+    """Too few distinct degrees -> warn and return the fixed fallback exponent."""
+    from hypegrl.inference.parameters import DEFAULT_GAMMA
+
     G = nx.cycle_graph(10)  # every node degree 2: a single distinct degree
-    with pytest.warns(UserWarning, match="falling back to k_min=1"):
+    with pytest.warns(UserWarning, match="fallback gamma"):
         gamma, _ = estimate_gamma(G)
-    assert np.isfinite(gamma)
+    assert gamma == DEFAULT_GAMMA
+    assert gamma >= 2.0  # valid for the PSO model, unlike the old k_min=1 MLE (~1.72)
+
+    # the default is overridable
+    with pytest.warns(UserWarning, match="fallback gamma"):
+        gamma2, _ = estimate_gamma(G, fallback_gamma=3.0)
+    assert gamma2 == 3.0
 
 
 def test_estimate_gamma_explicit_kmin_unchanged():
@@ -95,3 +104,46 @@ def test_estimate_gamma_explicit_kmin_unchanged():
     gamma, used = estimate_gamma(G, k_min=3)
     assert gamma == pytest.approx(_gamma_mle(tail, 3))
     assert used.size == tail.size
+
+
+# ── Goodness-of-fit (CSN §4 bootstrap) ───────────────────────────────────────
+
+def test_gof_returns_none_when_unfittable():
+    """A degree sequence that can't be fit at all -> None (like choose_kmin_ks)."""
+    assert power_law_gof([d for _, d in nx.cycle_graph(20).degree()]) is None
+
+
+def test_gof_dict_shape_and_p_range():
+    """The result carries the fit summary and a p-value in [0, 1]."""
+    rng = np.random.default_rng(0)
+    res = power_law_gof(rng.zipf(2.5, size=1000), n_bootstrap=100, seed=0)
+    expected_keys = {"p_value", "plausible", "D", "k_min",
+                     "gamma", "n_tail", "n_bootstrap"}
+    assert set(res) == expected_keys
+    assert 0.0 <= res["p_value"] <= 1.0
+    assert res["plausible"] == (res["p_value"] >= 0.1)
+
+
+def test_gof_does_not_reject_true_power_law():
+    """A genuine power-law sample is judged plausible (large p)."""
+    rng = np.random.default_rng(1)
+    res = power_law_gof(rng.zipf(2.5, size=2000), n_bootstrap=200, seed=1)
+    assert res["plausible"]
+    assert res["p_value"] >= 0.1
+
+
+def test_gof_rejects_non_power_law():
+    """A Poisson (bell-shaped, not heavy-tailed) sequence is rejected (small p)."""
+    rng = np.random.default_rng(2)
+    degrees = rng.poisson(5, size=3000) + 1  # shift to degrees >= 1
+    res = power_law_gof(degrees, n_bootstrap=200, seed=2)
+    assert not res["plausible"]
+    assert res["p_value"] < 0.1
+
+
+def test_gof_reproducible_with_seed():
+    """Same seed -> identical p-value (the test is otherwise stochastic)."""
+    degrees = np.random.default_rng(3).zipf(2.5, size=1000)
+    a = power_law_gof(degrees, n_bootstrap=100, seed=7)
+    b = power_law_gof(degrees, n_bootstrap=100, seed=7)
+    assert a["p_value"] == b["p_value"]
