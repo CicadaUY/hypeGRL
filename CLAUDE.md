@@ -92,7 +92,7 @@ Decision rule for what belongs here:
 
 Current contents:
 - `estimate_gamma(G, k_min=None)` — discrete power-law MLE (Clauset–Shalizi–Newman, arXiv:0706.1062, §3.2). `k_min=None` (default) selects the cutoff automatically by KS minimisation; an explicit integer uses that cutoff directly. Also importable as `hypegrl.embedders.hypermap.estimate_gamma`.
-- `choose_kmin_ks(degrees, min_tail=10)` — CSN §3.3 KS-minimising choice of the cutoff; returns `{k_min, gamma, ks, n_tail}` (large `ks` ⇒ the degree distribution is not really a power law, e.g. a tree), or `None` when the tail is too small to trust.
+- `choose_kmin_ks(degrees)` — CSN §3.3 KS-minimising choice of the cutoff. Candidates are the distinct degrees **with the largest dropped** (following the `powerlaw` package's `find_xmin`): the max-degree cutoff has a single-value tail that any distribution fits perfectly (KS=0), so scoring it spuriously wins (this was giving trees a meaningless `γ≈6.5`). Returns `{k_min, gamma, ks, n_tail}` (large `ks` ⇒ not really a power law, e.g. a tree), or `None` when there are fewer than three distinct degrees.
 
 Planned: `estimate_temperature` (clustering matching) will land here; that is where it would share logic with `_dmercator_init.py`'s existing `infer_kappa_and_beta` / `_expected_clustering` (the S¹ inverse-temperature β ≈ 1/T) if we later consolidate.
 

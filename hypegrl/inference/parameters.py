@@ -60,26 +60,28 @@ def _ks_distance(tail_degrees: np.ndarray, k_min: float, gamma: float) -> float:
     return float(np.max(np.abs(emp_ccdf - fit_ccdf)))
 
 
-def choose_kmin_ks(degrees, min_tail: int = 10) -> dict | None:
+def choose_kmin_ks(degrees) -> dict | None:
     """Choose the power-law lower cutoff ``k_min`` by KS minimisation (CSN §3.3).
 
-    For every distinct degree value, fit ``gamma`` on the degrees at or above it
-    and score that fit by its KS distance to the data; the best cutoff is the one
-    with the smallest KS distance. Too small a cutoff pulls the non-power-law body
-    of the distribution into the fit (biasing ``gamma``); too large a cutoff
-    throws away tail data (inflating its variance) — the KS distance trades these
-    off. Candidates leaving fewer than ``min_tail`` nodes in the tail are skipped,
-    since the fit is too noisy to trust there.
+    For every candidate cutoff, fit ``gamma`` on the degrees at or above it and
+    score that fit by its KS distance to the data; the best cutoff is the one with
+    the smallest KS distance. Too small a cutoff pulls the non-power-law body of
+    the distribution into the fit (biasing ``gamma``); too large a cutoff throws
+    away tail data (inflating its variance) — the KS distance trades these off.
+
+    The candidates are the distinct degree values **with the largest dropped**,
+    following the ``powerlaw`` package's ``Fit.find_xmin`` ("Don't look at last
+    xmin, as that's also the xmax"). The largest value's tail is a single point,
+    which any distribution fits perfectly (KS = 0); scoring it would spuriously
+    select a meaningless cutoff (e.g. on a tree, whose top degree is shared by many
+    nodes). Equivalently: every scored cutoff has a tail spanning at least two
+    distinct degrees. With fewer than two candidates left (fewer than three
+    distinct degrees), the cutoff is undefined and this returns ``None``.
 
     Parameters
     ----------
     degrees:
         Iterable of node degrees (e.g. ``[d for _, d in G.degree()]``).
-    min_tail:
-        Minimum number of nodes that must remain at or above a candidate cutoff
-        for it to be considered. CSN suggest ~50 for reliable fits; for the small
-        research graphs here it is relaxed, but a cutoff with only a handful of
-        tail nodes is still meaningless.
 
     Returns
     -------
@@ -87,14 +89,16 @@ def choose_kmin_ks(degrees, min_tail: int = 10) -> dict | None:
         ``{"k_min", "gamma", "ks", "n_tail"}`` for the best cutoff, where ``ks``
         is the (unitless, in ``[0, 1]``) KS distance — a large value means the
         degree distribution is not well described by a power law (e.g. a tree).
-        Returns ``None`` when no candidate leaves at least ``min_tail`` nodes.
+        Returns ``None`` when there are fewer than three distinct degrees.
     """
     degrees = np.asarray([d for d in degrees if d >= 1], dtype=float)
+    candidates = np.unique(degrees)[:-1]  # drop the largest (its tail is one value)
+    if candidates.size < 2:
+        return None
+
     best: dict | None = None
-    for k_min in np.unique(degrees):
+    for k_min in candidates:
         tail = degrees[degrees >= k_min]
-        if tail.size < min_tail:
-            continue
         gamma = _gamma_mle(tail, k_min)
         ks = _ks_distance(tail, k_min, gamma)
         if best is None or ks < best["ks"]:
@@ -107,7 +111,7 @@ def choose_kmin_ks(degrees, min_tail: int = 10) -> dict | None:
     return best
 
 
-def estimate_gamma(G: nx.Graph, k_min: int | None = None, min_tail: int = 10):
+def estimate_gamma(G: nx.Graph, k_min: int | None = None):
     """Estimate the power-law exponent ``gamma`` of ``G``'s degree distribution.
 
     The exponent is the discrete MLE (:func:`_gamma_mle`). The only free choice is
@@ -118,9 +122,9 @@ def estimate_gamma(G: nx.Graph, k_min: int | None = None, min_tail: int = 10):
       (:func:`choose_kmin_ks`).
     - passing an explicit integer uses that cutoff directly.
 
-    On graphs too small to select a cutoff (fewer than ``min_tail`` tail nodes),
-    it falls back to ``k_min=1`` with a warning — the exponent is then biased and
-    should be treated with suspicion (a small graph rarely pins down a power law).
+    When automatic selection is not possible (fewer than three distinct degrees,
+    so :func:`choose_kmin_ks` returns ``None``), it falls back to ``k_min=1`` with
+    a warning — the exponent is then biased and should be treated with suspicion.
 
     Returns
     -------
@@ -134,14 +138,13 @@ def estimate_gamma(G: nx.Graph, k_min: int | None = None, min_tail: int = 10):
         raise ValueError("graph has no nodes with degree >= 1")
 
     if k_min is None:
-        chosen = choose_kmin_ks(degrees, min_tail=min_tail)
+        chosen = choose_kmin_ks(degrees)
         if chosen is None:
             k_min = 1
             warnings.warn(
-                f"estimate_gamma: too few nodes ({degrees.size}) to select k_min "
-                f"by KS minimisation (need a tail of at least {min_tail}); falling "
-                "back to k_min=1, which biases gamma. Pass k_min explicitly if you "
-                "know the power-law cutoff.",
+                "estimate_gamma: too few distinct degrees to select k_min by KS "
+                "minimisation (need at least three); falling back to k_min=1, which "
+                "biases gamma. Pass k_min explicitly if you know the power-law cutoff.",
                 stacklevel=2,
             )
         else:

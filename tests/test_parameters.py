@@ -38,18 +38,35 @@ def test_choose_kmin_recovers_known_exponent():
     rng = np.random.default_rng(0)
     degrees = rng.zipf(a_true, size=20_000)
 
-    res = choose_kmin_ks(degrees, min_tail=50)
+    res = choose_kmin_ks(degrees)
     assert res is not None
     assert res["gamma"] == pytest.approx(a_true, abs=0.2)
     assert res["k_min"] >= 1
-    assert res["n_tail"] >= 50
     assert 0.0 <= res["ks"] <= 1.0
 
 
-def test_choose_kmin_returns_none_when_tail_too_small():
-    """No candidate cutoff can satisfy an unreachably large ``min_tail``."""
-    degrees = [d for _, d in nx.karate_club_graph().degree()]
-    assert choose_kmin_ks(degrees, min_tail=1000) is None
+def test_choose_kmin_excludes_degenerate_max_cutoff():
+    """The max-degree cutoff (single-value tail, KS=0) is never selected.
+
+    A balanced binary tree has degrees {1, 2, 3} with the top value (3) shared by
+    many nodes; scoring k_min=3 would fit that single-value tail perfectly (KS=0)
+    and return a meaningless gamma (~6.5). Dropping the largest candidate prevents
+    that: the chosen cutoff is below the max degree and gamma is the honest MLE.
+    """
+    degrees = [d for _, d in nx.balanced_tree(2, 4).degree()]
+    res = choose_kmin_ks(degrees)
+    assert res is not None
+    assert res["k_min"] < max(degrees)   # not the degenerate top cutoff
+    assert res["gamma"] < 3.0            # not the spurious ~6.5
+
+
+def test_choose_kmin_returns_none_with_too_few_distinct_degrees():
+    """Fewer than three distinct degrees leaves < 2 candidate cutoffs -> None."""
+    degs = lambda G: [d for _, d in G.degree()]  # noqa: E731
+    assert choose_kmin_ks(degs(nx.cycle_graph(10))) is None  # 1 distinct degree
+    assert choose_kmin_ks(degs(nx.star_graph(6))) is None    # 2 distinct degrees
+    # karate has many distinct degrees, so it does select a cutoff
+    assert choose_kmin_ks(degs(nx.karate_club_graph())) is not None
 
 
 def test_estimate_gamma_auto_on_scale_free_graph():
@@ -62,11 +79,11 @@ def test_estimate_gamma_auto_on_scale_free_graph():
     assert tail.min() >= 1
 
 
-def test_estimate_gamma_small_graph_falls_back_with_warning():
-    """A graph too small to select a cutoff warns and falls back to k_min=1."""
-    G = nx.karate_club_graph()
+def test_estimate_gamma_falls_back_with_warning_when_cutoff_undefined():
+    """Too few distinct degrees to select a cutoff -> warn and fall back to k_min=1."""
+    G = nx.cycle_graph(10)  # every node degree 2: a single distinct degree
     with pytest.warns(UserWarning, match="falling back to k_min=1"):
-        gamma, _ = estimate_gamma(G, min_tail=1000)
+        gamma, _ = estimate_gamma(G)
     assert np.isfinite(gamma)
 
 
