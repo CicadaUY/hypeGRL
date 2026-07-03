@@ -8,7 +8,7 @@ weight annotations showing estimated and true values side by side.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Sequence
 
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
@@ -31,6 +31,7 @@ def plot_poincare_graph(
     show_node_labels: bool = True,
     title: Optional[str] = None,
     figsize: tuple[int, int] = (7, 7),
+    nodes: Optional[Sequence] = None,
 ) -> plt.Figure:
     """
     Plot a graph in the Poincaré disk with nodes at their embeddings.
@@ -40,12 +41,30 @@ def plot_poincare_graph(
     they exist in ``G``. This means non-existent candidate edges in
     ``unknown_edges`` are rendered too.
 
+    .. warning::
+       ``X`` row ``i`` must correspond to a specific node of ``G``. By default
+       that node is the ``i``-th of ``G.nodes()`` — but some embedders reorder
+       nodes and break this silently, notably
+       :class:`~hypegrl.embedders.hypermap.HyperMapEmbedder`, whose
+       ``embeddings()`` rows follow ``nodes_sorted`` (degree-descending), *not*
+       ``G.nodes()`` order. Passing ``plot_poincare_graph(G, emb.embeddings())``
+       directly then pairs every node with the wrong point and the plot looks like
+       noise. Pass the embedding's node order via ``nodes`` so the alignment is
+       handled for you::
+
+           plot_poincare_graph(G, emb.embeddings(), nodes=emb.nodes_sorted)
+
+       Embedders that keep ``G.nodes()`` order (e.g. ``PoincareMapsEmbedder``,
+       which builds its matrices with ``nx.to_numpy_array(G)``) can omit ``nodes``.
+
     Parameters
     ----------
     G:
         Original NetworkX graph. Determines which edges are *known*.
     X:
-        ``(N, 2)`` array of Poincaré disk embeddings.
+        ``(N, 2)`` array of Poincaré disk embeddings. Row ``i`` corresponds to
+        ``nodes[i]`` if ``nodes`` is given, else to the ``i``-th node of
+        ``G.nodes()`` (see the warning above).
     unknown_edges:
         List of ``(m, n)`` tuples whose weights were treated as unknown.
         Drawn as dashed edges whether or not they exist in ``G``.
@@ -71,12 +90,18 @@ def plot_poincare_graph(
     disk_color:
         Background fill colour of the Poincaré disk.
     show_node_labels:
-        If ``True``, render node indices as white text inside each node.
-        Disable for large graphs.
+        If ``True``, render each node's label as white text inside it (the
+        ``nodes`` label when given, otherwise the row index). Disable for large
+        graphs.
     title:
         Plot title. Defaults to ``"Graph embeddings in the Poincaré disk"``.
     figsize:
         Figure size in inches, used only when ``ax`` is ``None``.
+    nodes:
+        Node label for each row of ``X`` (e.g. ``emb.nodes_sorted``): ``nodes[i]``
+        is the node whose embedding is ``X[i]``. Use this when the embedding rows
+        are not in ``G.nodes()`` order (see the warning above). When ``None``
+        (default), row ``i`` is assumed to be the ``i``-th node of ``G.nodes()``.
 
     Returns
     -------
@@ -99,6 +124,26 @@ def plot_poincare_graph(
         "plot_poincare_graph requires 2D embeddings; "
         f"got shape {X.shape}."
     )
+
+    if nodes is not None and len(nodes) != X.shape[0]:
+        raise ValueError(
+            f"len(nodes)={len(nodes)} must equal the number of embedding rows "
+            f"X.shape[0]={X.shape[0]}."
+        )
+    row_of = None if nodes is None else {node: i for i, node in enumerate(nodes)}
+
+    def _pos(node):
+        # (x, y) of a node. Without ``nodes``, rows are in G.nodes() order, so the
+        # node label doubles as the row index; with ``nodes``, look the row up.
+        if row_of is None:
+            return X[node]
+        try:
+            return X[row_of[node]]
+        except KeyError:
+            raise KeyError(
+                f"node {node!r} appears in G but not in `nodes`; `nodes` must "
+                "give the node label for every row of X."
+            ) from None
 
     unknown_edges     = unknown_edges or []
     a_omega_estimated = (
@@ -135,8 +180,8 @@ def plot_poincare_graph(
         m: int, n: int,
         color: str, lw: float, ls: str, zorder: int,
     ) -> None:
-        x0, y0 = X[m]
-        x1, y1 = X[n]
+        x0, y0 = _pos(m)
+        x1, y1 = _pos(n)
         ax.plot(
             [x0, x1], [y0, y1],
             color=color, linewidth=lw, linestyle=ls,
@@ -146,8 +191,8 @@ def plot_poincare_graph(
     def _annotate_unknown(m: int, n: int) -> None:
         if not show_weights:
             return
-        x0, y0 = X[m]
-        x1, y1 = X[n]
+        x0, y0 = _pos(m)
+        x1, y1 = _pos(n)
         mx, my = (x0 + x1) / 2, (y0 + y1) / 2
         key = (min(m, n), max(m, n))
         est = estimated_map.get(key, float("nan"))
@@ -186,7 +231,7 @@ def plot_poincare_graph(
     if show_node_labels:
         for i in range(len(X)):
             ax.text(
-                X[i, 0], X[i, 1], str(i),
+                X[i, 0], X[i, 1], str(i if nodes is None else nodes[i]),
                 fontsize=5.5, ha="center", va="center",
                 color="white", fontweight="bold", zorder=6,
             )

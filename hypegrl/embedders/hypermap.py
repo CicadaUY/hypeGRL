@@ -477,7 +477,13 @@ class HyperMapEmbedder(HyperbolicEmbedder):
         """
         Return ``(N, d)`` Poincaré ball embeddings.
 
-        Row order matches :attr:`nodes_sorted` (degree-descending).
+        Row order matches :attr:`nodes_sorted` (degree-descending), **not**
+        ``G.nodes()`` order. Anything that pairs these rows back with the graph
+        must account for this — e.g. when plotting with
+        :func:`~hypegrl.visualization.disk.plot_poincare_graph`, pass the row
+        order via its ``nodes`` argument::
+
+            plot_poincare_graph(G, emb.embeddings(), nodes=emb.nodes_sorted)
 
         Raises
         ------
