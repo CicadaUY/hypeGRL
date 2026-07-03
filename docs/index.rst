@@ -34,6 +34,7 @@ hypeGRL
    tutorials/unknown_edges
    tutorials/streaming
    tutorials/graph_generation
+   tutorials/hypermap_tree_vs_powerlaw
 
 .. toctree::
    :maxdepth: 2
