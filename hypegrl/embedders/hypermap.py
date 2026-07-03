@@ -550,10 +550,16 @@ class HyperMapEmbedder(HyperbolicEmbedder):
         binned "tail slope" read-off (same target, without binning) — our
         reformulation, not verbatim from the paper.
 
-        HyperMap is only weakly sensitive to the *input* ``T`` (the paper's Fig. 5),
-        so reading ``T`` off an embedding produced with an approximate input value
-        already lands close to the real one. For a self-consistent estimate, set
-        ``self.T`` to the result and refit, repeating once or twice::
+        The paper reports that the *quality* of the embedding is not significantly
+        affected by the input ``T`` (its Fig. 5: the inferred connection probability
+        is nearly the same across input ``T`` up to the real one), so reading ``T``
+        off a single embedding made with any reasonable input already gives a good
+        estimate. What ``T`` is *for*: it sets the average clustering the network is
+        characterised by, and it calibrates the connection-probability decoder
+        (:meth:`decode`, generation, link-prediction confidence); the *ranking* of
+        ``p(x)`` follows the hyperbolic distance regardless of ``T``. For a better,
+        self-consistent estimate, set ``self.T`` to the result and refit, repeating
+        once or twice::
 
             for _ in range(3):
                 emb.fit(G)
