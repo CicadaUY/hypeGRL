@@ -48,23 +48,19 @@ import numpy as np
 import torch
 from scipy.optimize import minimize_scalar
 
+from hypegrl.embedders._hypermap_init import assign_radii, hypermap_init
 from hypegrl.embedders.base import HyperbolicEmbedder
+from hypegrl.inference.joint_optimizer import (
+    joint_optimize,
+)
+from hypegrl.inference.parameters import estimate_gamma
 from hypegrl.manifolds.poincare import (
     POINCARE_BALL,
-    polar_to_poincare,
-    poincare_to_polar,
     hyperspherical_to_poincare,
     poincare_to_hyperspherical,
+    poincare_to_polar,
+    polar_to_poincare,
 )
-from hypegrl.inference.joint_optimizer import (
-    graph_to_tensor,
-    build_adjacency,
-    logit_init,
-)
-from hypegrl.embedders._hypermap_init import hypermap_init, assign_radii
-from hypegrl.inference.joint_optimizer import joint_optimize
-from hypegrl.inference.parameters import estimate_gamma
-
 
 # ---------------------------------------------------------------------------
 # Fermi-Dirac loss (autograd-compatible, arbitrary d)

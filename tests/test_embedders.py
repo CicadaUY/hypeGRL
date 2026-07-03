@@ -1,38 +1,37 @@
 """Tests for embedding methods."""
-import numpy as np
 import networkx as nx
+import numpy as np
 import pytest
 import torch
 
-from hypegrl.embedders.poincare_maps import (
-    PoincareMapsEmbedder,
-    forest_matrix,
-    soft_decoder,
-    symkl_loss_fn,
-)
-from hypegrl.inference.joint_optimizer import (
-    build_adjacency,
-    logit_init,
-    graph_to_tensor,
-)
-from hypegrl.embedders.poincare_embeddings import (
-    PoincareEmbeddingsEmbedder,
-    poincare_distance_matrix,
-    sample_negatives,
-    ranking_nll,
-    fermi_dirac_decoder,
-    fermi_dirac_nll,
-)
+from hypegrl.embedders._dmercator_init import compute_R
+from hypegrl.embedders.dmercator import DMercatorEmbedder
 from hypegrl.embedders.hydra import HydraEmbedder
 from hypegrl.embedders.hydra_plus import HydraPlusEmbedder
 from hypegrl.embedders.hypermap import (
     HyperMapEmbedder,
+)
+from hypegrl.embedders.hypermap import (
     fermi_dirac_nll as hypermap_fermi_dirac_nll,
 )
-from hypegrl.embedders.dmercator import DMercatorEmbedder
-from hypegrl.embedders._dmercator_init import compute_R
-from hypegrl.manifolds.poincare import polar_to_poincare, poincare_distances_polar
-
+from hypegrl.embedders.poincare_embeddings import (
+    PoincareEmbeddingsEmbedder,
+    fermi_dirac_decoder,
+    fermi_dirac_nll,
+    poincare_distance_matrix,
+    ranking_nll,
+    sample_negatives,
+)
+from hypegrl.embedders.poincare_maps import (
+    PoincareMapsEmbedder,
+    forest_matrix,
+    soft_decoder,
+)
+from hypegrl.inference.joint_optimizer import (
+    build_adjacency,
+    logit_init,
+)
+from hypegrl.manifolds.poincare import poincare_distances_polar, polar_to_poincare
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
@@ -73,9 +72,9 @@ def test_forest_matrix_inverse_identity(small_graph):
     A = torch.tensor(nx.to_numpy_array(small_graph), dtype=torch.float64)
     D = torch.diag(A.sum(dim=1))
     L = D - A
-    I = torch.eye(5, dtype=torch.float64)
+    Id = torch.eye(5, dtype=torch.float64)
     Q = forest_matrix(A)
-    assert torch.allclose(Q @ (I + L), I, atol=1e-9)
+    assert torch.allclose(Q @ (Id + L), Id, atol=1e-9)
 
 
 # ── soft_decoder ──────────────────────────────────────────────────────────
@@ -355,7 +354,7 @@ def test_hydra_plus_stress_improves_over_hydra(karate):
 
 
 def test_hydra_plus_lower_stress_than_hydra_on_karate(karate):
-    """HYDRA+ must achieve strictly lower stress than vanilla HYDRA on the karate graph."""
+    """HYDRA+ must achieve strictly lower stress than vanilla HYDRA on karate."""
     hydra = HydraEmbedder(dim=2, curvature=1.0)
     hydra.fit(karate)
 
