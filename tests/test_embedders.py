@@ -853,6 +853,48 @@ def test_hypermap_refinement_adjacency_matches_embedding_order():
     assert not np.isclose(loss0, loss_misaligned)
 
 
+@pytest.mark.parametrize("T_true", [0.4, 0.7])
+def test_hypermap_estimate_temperature_recovers_known_slope(T_true):
+    """estimate_temperature inverts the Fermi-Dirac connection-probability slope.
+
+    Build a fixed embedding and thresholds, sample edges from the model's own
+    decoder at a known T, and check the one-parameter logistic MLE (E-PSO §V slope
+    fit) recovers it. This isolates the estimator from embedding quality.
+    """
+    rng = np.random.default_rng(0)
+    N = 500
+    # random points in the Poincaré disk: uniform angle, hyperbolic radius in [0, 6]
+    theta = rng.uniform(0.0, 2 * np.pi, N)
+    rho = np.tanh(rng.uniform(0.0, 6.0, N) / 2.0)          # Poincaré norm (zeta = 1)
+    X = np.column_stack([rho * np.cos(theta), rho * np.sin(theta)])
+
+    emb = HyperMapEmbedder(zeta=1.0)
+    emb.T = T_true
+    emb._R = np.full(N, 6.0)                                # threshold near the median
+
+    P = emb.decode(X)                                      # model conn. prob at T_true
+    A = (rng.random((N, N)) < P).astype(float)
+    A = np.triu(A, 1)
+    A = A + A.T                                             # symmetric, zero diagonal
+
+    assert emb.estimate_temperature(X=X, A=A) == pytest.approx(T_true, rel=0.15)
+
+
+def test_hypermap_estimate_temperature_end_to_end(karate):
+    """After a real fit, estimate_temperature returns a positive temperature."""
+    emb = HyperMapEmbedder(d=2, gamma=2.5, T=0.5, n_steps=0, log_every=0,
+                           verbose_init=False)
+    emb.fit(karate)
+    T_hat = emb.estimate_temperature()                     # uses fitted X and adjacency
+    assert np.isfinite(T_hat) and T_hat > 0.0
+
+
+def test_hypermap_estimate_temperature_requires_fit():
+    """estimate_temperature before fit raises rather than reading uninitialised R."""
+    with pytest.raises(RuntimeError):
+        HyperMapEmbedder().estimate_temperature()
+
+
 def test_dmercator_x_init_equivalent_to_default(karate):
     n_steps = 20
 

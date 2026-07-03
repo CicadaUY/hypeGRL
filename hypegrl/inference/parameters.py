@@ -11,10 +11,10 @@ Each estimator documents its own method and source in its own docstring. So far
 this covers the power-law exponent ``gamma`` of the degree distribution with an
 automatic choice of the lower cutoff ``k_min`` (:func:`estimate_gamma`,
 :func:`choose_kmin_ks`) and a goodness-of-fit test for the power-law hypothesis
-(:func:`power_law_gof`). It is the intended home for the remaining E-PSO /
-HyperMap parameters too — the temperature ``T`` (via clustering matching) and the
-``m`` / ``L`` average-degree heuristics — so that all of ``(m, L, gamma, T,
-zeta)`` are inferred in one place rather than inside a specific embedder.
+(:func:`power_law_gof`). The ``m`` / ``L`` average-degree heuristics could also
+land here (pure graph → scalar). The E-PSO temperature ``T`` does **not**: its
+estimator (E-PSO §V connection-probability slope fit) needs an embedding, so it
+lives on the embedder as ``HyperMapEmbedder.estimate_temperature``, not here.
 """
 
 from __future__ import annotations

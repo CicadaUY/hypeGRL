@@ -46,6 +46,7 @@ import geoopt
 import networkx as nx
 import numpy as np
 import torch
+from scipy.optimize import minimize_scalar
 
 from hypegrl.embedders.base import HyperbolicEmbedder
 from hypegrl.manifolds.poincare import (
@@ -525,6 +526,103 @@ class HyperMapEmbedder(HyperbolicEmbedder):
             -(self.zeta / (2.0 * self.T)) * (D - R_pair)
         )
         return P.detach().numpy()
+
+    def estimate_temperature(
+        self,
+        X: Optional[np.ndarray] = None,
+        A: Optional[np.ndarray] = None,
+    ) -> float:
+        r"""
+        Estimate the temperature ``T`` from the embedding's connection-probability
+        slope (E-PSO connection-probability matching; Papadopoulos, Psomas &
+        Krioukov, "Network Mapping by Replaying Hyperbolic Growth", IEEE/ACM Trans.
+        Networking 23, 198 (2015), §V).
+
+        The E-PSO global connection probability (their Eq. 10) is Fermi-Dirac in the
+        hyperbolic distance ``x``,
+
+        .. math::  p(x) = \frac{1}{1 + e^{(\zeta / 2T)(x - R)}},
+
+        so its steepness is exactly :math:`\zeta / 2T`. With the embedding fixed
+        (coordinates and per-node thresholds :math:`R_i`), the temperature that best
+        matches this curve to the observed connectivity is the maximum-likelihood
+        slope of a one-parameter logistic fit of the edge indicator :math:`A_{ij}`
+        on :math:`u_{ij} = x_{ij} - R_{\max(i,j)}`: :math:`p = \sigma(-s\,u_{ij})`
+        with :math:`s = \zeta / 2T`, whence :math:`T = \zeta / 2s`.
+
+        Fitting ``s`` by logistic MLE is the maximum-likelihood form of the paper's
+        binned "tail slope" read-off (same target, without binning) — our
+        reformulation, not verbatim from the paper.
+
+        HyperMap is only weakly sensitive to the *input* ``T`` (the paper's Fig. 5),
+        so reading ``T`` off an embedding produced with an approximate input value
+        already lands close to the real one. For a self-consistent estimate, set
+        ``self.T`` to the result and refit, repeating once or twice::
+
+            for _ in range(3):
+                emb.fit(G)
+                emb.T = emb.estimate_temperature()
+
+        Parameters
+        ----------
+        X:
+            ``(N, d)`` embedding to read ``T`` from (rows in ``nodes_sorted``
+            order). Defaults to the current fitted embedding.
+        A:
+            ``(N, N)`` binary adjacency in ``nodes_sorted`` order. Defaults to the
+            fitted graph's adjacency.
+
+        Returns
+        -------
+        float
+            Estimated temperature ``T > 0``.
+        """
+        if self._R is None:
+            raise RuntimeError("Call fit() before estimate_temperature().")
+        if X is None:
+            X = self.embeddings()
+        if A is None:
+            if self._G is None or self._nodes_sorted is None:
+                raise RuntimeError("Call fit() before estimate_temperature().")
+            order = {node: i for i, node in enumerate(self._nodes_sorted)}
+            N = len(self._nodes_sorted)
+            A = np.zeros((N, N))
+            for u_node, v_node in self._G.edges():
+                i, j = order[u_node], order[v_node]
+                A[i, j] = A[j, i] = 1.0
+
+        X_t  = torch.as_tensor(X, dtype=torch.float64)
+        dist = POINCARE_BALL.dist(X_t.unsqueeze(1), X_t.unsqueeze(0)).numpy()
+        N    = X.shape[0]
+        idx  = np.arange(N)
+        # per-pair threshold = younger node's R = R[max(i, j)] (as in decode())
+        R_pair = np.asarray(self._R)[np.maximum(idx[:, None], idx[None, :])]
+
+        upper = np.triu_indices(N, k=1)
+        u = (dist - R_pair)[upper]   # hyperbolic distance beyond the pair's threshold
+        a = np.asarray(A)[upper]
+
+        # One-parameter logistic MLE for the slope s = zeta / 2T of p = sigma(-s u).
+        # The negative log-likelihood is convex in s; minimise it over s > 0 (T > 0).
+        # np.logaddexp keeps log-sigmoid stable for large |s u|.
+        def neg_ll(s: float) -> float:
+            z = -s * u                          # logit of p
+            log_p    = -np.logaddexp(0.0, -z)   # log sigma(z)
+            log_1m_p = -np.logaddexp(0.0,  z)   # log sigma(-z) = log(1 - p)
+            return -(a * log_p + (1.0 - a) * log_1m_p).sum()
+
+        s_lo, s_hi = 1e-6, 1e3
+        s_hat = float(minimize_scalar(
+            neg_ll, bounds=(s_lo, s_hi), method="bounded"
+        ).x)
+        if s_hat <= s_lo * 1.001 or s_hat >= s_hi * 0.999:
+            warnings.warn(
+                "estimate_temperature: slope hit the search bound; the connection "
+                "probability is nearly step-like (T→0) or flat (T→∞). Returning the "
+                "boundary estimate.",
+                stacklevel=2,
+            )
+        return self.zeta / (2.0 * s_hat)
 
     # ------------------------------------------------------------------
     # Capability flags
