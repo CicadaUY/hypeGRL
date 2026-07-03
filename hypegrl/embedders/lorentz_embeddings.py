@@ -18,10 +18,22 @@ Geometry
 Points live on the upper sheet of the two-sheeted hyperboloid
 ``H^d = {x in R^{d+1} : <x, x>_L = -1, x_0 > 0}`` with the Lorentzian scalar
 product ``<x, y>_L = -x_0 y_0 + sum_i x_i y_i`` (Eq. 2-3). An intrinsic
-dimension ``d`` therefore uses ``d + 1`` ambient coordinates. ``geoopt.Lorentz``
-supplies the exact ``expmap`` (Eq. 9), so ``RiemannianAdam`` over it *is* the
-paper's exact-geodesic optimiser. Embeddings are initialised near the origin
-per Eq. 6: ``x' ~ U(-init_scale, init_scale)`` with ``x_0 = sqrt(1 + ||x'||^2)``.
+dimension ``d`` therefore uses ``d + 1`` ambient coordinates. The manifold is
+``manifolds.lorentz.LORENTZ`` (a ``StableLorentz``: ``geoopt.Lorentz`` plus a
+spatial-norm clamp, see below), whose exact ``expmap`` (Eq. 9) makes
+``RiemannianAdam`` over it a geodesic optimiser. Embeddings are initialised near
+the origin per Eq. 6: ``x' ~ U(-init_scale, init_scale)`` with
+``x_0 = sqrt(1 + ||x'||^2)``.
+
+**Numerical stability.** The exponential map scales coordinates by
+``cosh(||v||_L)``, so one high-learning-rate step toward the boundary can
+overflow ``x_0`` and turn every distance into ``NaN`` — the well-known failure
+of naive hyperboloid optimisation on leaf-heavy graphs. ``StableLorentz`` clamps
+each point's spatial norm to ``max_norm`` (default ``1e2``, Poincaré radius
+``≈ 0.99``) after every retraction, mirroring the reference implementation's
+``set_dim0`` renorm. This is what lets the embedder use an aggressive learning
+rate (and reach the near-boundary radii that encode generality) without
+diverging.
 
 For compatibility with the rest of hypeGRL (disk plotters, downstream code),
 :meth:`embeddings` returns the **Poincaré-ball image** ``(N, d)`` via the
@@ -87,12 +99,19 @@ objective; the departures are confined to regimes the paper does not define:
   unknown-edge case the paper never covers. It is a no-op on binary graphs
   regardless (``K_{ij} = 1``).
 - **Optimiser:** we use geoopt ``RiemannianAdam``; the paper's Algorithm 1 is
-  exact-geodesic Riemannian *SGD*. The geometry is still exact — geoopt's
-  Lorentz ``expmap`` follows the true geodesic (Eq. 9) — but the update rule is
-  Adam, matching the rest of the library (and our Poincaré-Embeddings embedder).
+  exact-geodesic Riemannian *SGD*. The geometry is still exact — the Lorentz
+  ``expmap`` follows the true geodesic (Eq. 9) — but the update rule is Adam,
+  matching the rest of the library (and our Poincaré-Embeddings embedder). We do
+  not replicate the reference's learning-rate burn-in (lr ÷ 10 for the first
+  epochs); with Adam and the near-origin Eq. 6 init it made no measurable
+  difference here.
 - **Defaults** (``init_scale = 1e-3`` follows the paper's ``U(-0.001, 0.001)``;
   ``n_negatives = 50`` is hypeGRL's default, the paper subsamples without a
-  stated count for these experiments).
+  stated count). ``lr_X = 0.3`` / ``n_steps = 2000`` are tuned for this loss:
+  the embedding must reach large radius for leaves to separate (generality =
+  norm), which a timid rate never does — measured on trees/karate/Les Misérables
+  a slow rate leaves the embedding under-spread and reconstruction 5-10 AUC
+  points worse. The spatial-norm clamp is what makes this aggressive rate safe.
 """
 
 from __future__ import annotations
@@ -294,11 +313,15 @@ class LorentzEmbeddingsEmbedder(HyperbolicEmbedder):
         Number of negatives sampled per positive pair per step. Default ``50``
         is hypeGRL's; the paper subsamples ``N(i, j)`` without a stated count.
     lr_X:
-        Learning rate for Riemannian Adam on the embeddings.
+        Learning rate for Riemannian Adam on the embeddings. Default ``0.3`` is
+        deliberately aggressive: leaves must reach large radius to separate
+        (generality = norm), and the spatial-norm clamp on ``StableLorentz``
+        keeps that safe from the hyperboloid overflow that would otherwise NaN.
     lr_a:
         Learning rate for Adam on the unknown edge weights.
     n_steps:
-        Number of gradient steps.
+        Number of gradient steps. Default ``2000``; trees/networks need the
+        extra steps to spread to the boundary.
     regularize_a:
         L2 regularisation on unknown edge weights.
     grad_clip:
@@ -333,9 +356,9 @@ class LorentzEmbeddingsEmbedder(HyperbolicEmbedder):
         self,
         d: int = 2,
         n_negatives: int = 50,
-        lr_X: float = 1e-2,
+        lr_X: float = 3e-1,
         lr_a: float = 1e-2,
-        n_steps: int = 500,
+        n_steps: int = 2000,
         regularize_a: float = 0.0,
         grad_clip: float = 10.0,
         log_every: int = 50,

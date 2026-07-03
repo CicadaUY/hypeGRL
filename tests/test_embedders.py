@@ -14,6 +14,11 @@ from hypegrl.embedders.hypermap import (
 from hypegrl.embedders.hypermap import (
     fermi_dirac_nll as hypermap_fermi_dirac_nll,
 )
+from hypegrl.embedders.lorentz_embeddings import (
+    LorentzEmbeddingsEmbedder,
+    lorentz_distance_matrix,
+    lorentz_ranking_nll,
+)
 from hypegrl.embedders.poincare_embeddings import (
     PoincareEmbeddingsEmbedder,
     fermi_dirac_decoder,
@@ -31,6 +36,7 @@ from hypegrl.inference.joint_optimizer import (
     build_adjacency,
     logit_init,
 )
+from hypegrl.manifolds.lorentz import LORENTZ, StableLorentz
 from hypegrl.manifolds.poincare import poincare_distances_polar, polar_to_poincare
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
@@ -1186,3 +1192,117 @@ def test_pe_burnin_with_unknown_edges(small_graph):
     assert w.shape == (2,)
     assert (w > 0).all() and (w < 1).all()
     assert len(emb.loss_history) == 20
+
+
+# ── Lorentz Embeddings (Nickel & Kiela 2018) ─────────────────────────────────
+
+def _on_hyperboloid(H, k=1.0, atol=1e-6):
+    """<x,x>_L == -1/k and x_0 > 0 for every row."""
+    lsp = (H[:, 1:] ** 2).sum(axis=1) - H[:, 0] ** 2
+    return np.allclose(lsp, -1.0 / k, atol=atol) and (H[:, 0] > 0).all()
+
+
+def test_lorentz_embeddings_fit_shapes_and_manifold(karate):
+    emb = LorentzEmbeddingsEmbedder(d=2, n_steps=50, log_every=0, random_state=0)
+    emb.fit(karate)
+    N = karate.number_of_nodes()
+    # embeddings() is the (N, d) Poincaré-ball image; hyperboloid is (N, d+1).
+    assert emb.embeddings().shape == (N, 2)
+    assert emb.hyperboloid_embeddings().shape == (N, 3)
+    assert (np.linalg.norm(emb.embeddings(), axis=1) < 1.0).all()
+    assert _on_hyperboloid(emb.hyperboloid_embeddings())
+    assert emb.nodes() == list(karate.nodes())
+    assert emb.decode(emb.embeddings()).shape == (N, N)
+
+
+def test_lorentz_embeddings_stable_on_deep_tree():
+    # ── Regression guard for the StableLorentz spatial-norm clamp ───────────
+    # The exponential map scales coordinates by cosh(||v||_L); on a deep tree a
+    # high learning rate pushes leaves toward the boundary hard enough to
+    # overflow x_0 and NaN the whole embedding. The clamp (max_norm) bounds
+    # every retraction. Push lr high AND disable grad_clip — the worst case —
+    # and require finite, on-manifold, bounded coordinates.
+    G = nx.balanced_tree(2, 5)
+    emb = LorentzEmbeddingsEmbedder(
+        d=2, lr_X=2.0, n_steps=300, grad_clip=0.0, log_every=0, random_state=0,
+    )
+    emb.fit(G)
+    H = emb.hyperboloid_embeddings()
+    assert np.isfinite(H).all()
+    assert _on_hyperboloid(H)
+    spatial_norm = np.sqrt((H[:, 1:] ** 2).sum(axis=1))
+    assert spatial_norm.max() <= LORENTZ.max_norm + 1e-6
+
+
+def test_lorentz_embeddings_unknown_edges(small_graph):
+    unknown = [(0, 1), (1, 2)]
+    emb = LorentzEmbeddingsEmbedder(d=2, n_steps=30, log_every=0, random_state=0)
+    emb.fit(small_graph, unknown_edges=unknown)
+    w = emb.imputed_weights
+    assert w.shape == (2,)
+    assert (w > 0).all() and (w < 1).all()
+    assert np.isfinite(emb.hyperboloid_embeddings()).all()
+
+
+def test_lorentz_embeddings_weighted_graph_runs():
+    # Weighted similarity: the negative set is K_iz < K_ij, so an edge weight
+    # must be a valid float target and produce a finite embedding.
+    G = nx.les_miserables_graph()
+    emb = LorentzEmbeddingsEmbedder(d=2, n_steps=40, log_every=0, random_state=0)
+    emb.fit(G)
+    assert emb.structural_similarity(G).max() > 1.0  # genuinely weighted
+    assert np.isfinite(emb.hyperboloid_embeddings()).all()
+
+
+def test_lorentz_loss_unweighted_when_omega_empty(karate):
+    # With no unknown edges the loss must be the paper's *unweighted* Eq. 12:
+    # every positive contributes with weight 1, so on a binary graph the
+    # weighted (K_ij) and unweighted forms coincide, while on a *weighted*
+    # graph they must differ (weighted != unweighted).
+    # karate carries edge weights 1-7, so binarise for the "coincide" case.
+    A = (torch.tensor(nx.to_numpy_array(karate), dtype=torch.float64) > 0).double()
+    N = A.shape[0]
+    X = torch.tensor(
+        np.column_stack([np.sqrt(1 + 0.01 * np.arange(N)), 0.1 * np.ones((N, 2))]),
+        dtype=torch.float64,
+    )
+    mask = torch.zeros(N, N, dtype=torch.bool)
+    torch.manual_seed(0)
+    lo_w = lorentz_ranking_nll(X, A, 5, mask, weighted=True)
+    torch.manual_seed(0)
+    lo_u = lorentz_ranking_nll(X, A, 5, mask, weighted=False)
+    assert torch.allclose(lo_w, lo_u)  # binary graph: K_ij == 1
+
+    Aw = A.clone()
+    Aw[A > 0] = 3.0  # make it weighted
+    torch.manual_seed(0)
+    w_w = lorentz_ranking_nll(X, Aw, 5, mask, weighted=True)
+    torch.manual_seed(0)
+    w_u = lorentz_ranking_nll(X, Aw, 5, mask, weighted=False)
+    assert not torch.allclose(w_w, w_u)
+
+
+def test_stable_lorentz_clamps_spatial_norm():
+    # A huge point (whose squared norm would overflow) must project onto the
+    # boundary in its own direction, staying finite and on-manifold — not
+    # collapse to the origin.
+    L = StableLorentz(max_norm=10.0)
+    huge = torch.tensor([[0.0, 1e200, 3e199]], dtype=torch.float64)
+    p = L.projx(huge)
+    assert torch.isfinite(p).all()
+    assert _on_hyperboloid(p.numpy())
+    assert abs(float((p[:, 1:] ** 2).sum().sqrt()) - 10.0) < 1e-6
+    # small point is untouched
+    small = torch.tensor([[np.sqrt(1 + 0.3 ** 2), 0.3, 0.0]], dtype=torch.float64)
+    assert torch.allclose(L.projx(small), small, atol=1e-9)
+
+
+def test_lorentz_distance_matrix_symmetric_zero_diag(karate):
+    emb = LorentzEmbeddingsEmbedder(d=2, n_steps=20, log_every=0, random_state=0)
+    emb.fit(karate)
+    H = torch.tensor(emb.hyperboloid_embeddings(), dtype=torch.float64)
+    D = lorentz_distance_matrix(H)
+    N = H.shape[0]
+    assert D.shape == (N, N)
+    assert torch.allclose(torch.diag(D), torch.zeros(N, dtype=torch.float64), atol=1e-5)
+    assert torch.allclose(D, D.T, atol=1e-6)
