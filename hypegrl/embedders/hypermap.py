@@ -234,9 +234,18 @@ class HyperMapEmbedder(HyperbolicEmbedder):
         with extra angles set to zero; gradient refinement then moves
         all coordinates freely.
     gamma:
-        Power-law exponent of the degree distribution (gamma > 2).
+        Power-law exponent of the degree distribution (gamma > 2). Left as
+        ``None`` (default), it is estimated from the degree distribution at
+        ``fit`` time via :func:`hypegrl.inference.parameters.estimate_gamma`
+        (discrete MLE with an automatically chosen cutoff); pass a float to
+        override.
     T:
-        Temperature controlling clustering (0 < T < 1).
+        Temperature controlling clustering (0 < T < 1). The paper reports that
+        the embedding quality is not significantly affected by this value, so the
+        default ``0.5`` is usually fine; if you need it calibrated (e.g. for the
+        decoder's connection probabilities or generation), estimate it after a fit
+        with :meth:`estimate_temperature` and, optionally, set ``self.T`` to the
+        result and refit.
     zeta:
         Curvature of H^d (default 1.0).
     fix_radii:
