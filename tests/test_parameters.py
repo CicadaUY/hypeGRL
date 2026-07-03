@@ -53,8 +53,9 @@ def test_choose_kmin_excludes_degenerate_max_cutoff():
     many nodes; scoring k_min=3 would fit that single-value tail perfectly (KS=0)
     and return a meaningless gamma (~6.5). Dropping the largest candidate prevents
     that: the chosen cutoff is below the max degree and gamma is the honest MLE.
+    (Depth 6 keeps every candidate tail above the min_tail floor.)
     """
-    degrees = [d for _, d in nx.balanced_tree(2, 4).degree()]
+    degrees = [d for _, d in nx.balanced_tree(2, 6).degree()]
     res = choose_kmin_ks(degrees)
     assert res is not None
     assert res["k_min"] < max(degrees)   # not the degenerate top cutoff
@@ -66,8 +67,34 @@ def test_choose_kmin_returns_none_with_too_few_distinct_degrees():
     degs = lambda G: [d for _, d in G.degree()]  # noqa: E731
     assert choose_kmin_ks(degs(nx.cycle_graph(10))) is None  # 1 distinct degree
     assert choose_kmin_ks(degs(nx.star_graph(6))) is None    # 2 distinct degrees
-    # karate has many distinct degrees, so it does select a cutoff
-    assert choose_kmin_ks(degs(nx.karate_club_graph())) is not None
+    # a large graph with many distinct degrees and a well-supported tail selects one
+    assert choose_kmin_ks(degs(nx.barabasi_albert_graph(500, 2, seed=0))) is not None
+
+
+def test_choose_kmin_min_tail_floor_without_capping_gamma():
+    """The min_tail floor rejects under-supported cutoffs but leaves gamma uncapped.
+
+    Pure KS minimisation keeps shrinking as the tail shrinks, so on a bell-shaped
+    (non-power-law) sequence it drifts into a handful of tail points and reports a
+    spuriously steep exponent. The floor (CSN §3.2 rule of thumb, n >= 50) keeps
+    the selected tail statistically supported. It bounds tail *size*, not the
+    exponent: HyperMap/E-PSO admits any gamma >= 2, so gamma is left uncapped.
+    """
+    degrees = (np.random.default_rng(1).poisson(5, size=3000) + 1).astype(float)
+
+    # Disabling the floor lets KS drift into a tiny, unreliable tail.
+    assert choose_kmin_ks(degrees, min_tail=1)["n_tail"] < 50
+
+    tight = choose_kmin_ks(degrees)          # default floor
+    assert tight["n_tail"] >= 50             # selected tail stays well-supported
+    assert tight["gamma"] > 3.0              # ...yet gamma is not capped at 3
+
+
+def test_choose_kmin_returns_none_when_no_supported_tail():
+    """A graph too small for any tail to reach the floor returns None (tunable)."""
+    karate = [d for _, d in nx.karate_club_graph().degree()]  # N=34 < min_tail
+    assert choose_kmin_ks(karate) is None
+    assert choose_kmin_ks(karate, min_tail=5) is not None  # lowering it recovers a fit
 
 
 def test_estimate_gamma_auto_on_scale_free_graph():
@@ -133,10 +160,17 @@ def test_gof_does_not_reject_true_power_law():
 
 
 def test_gof_rejects_non_power_law():
-    """A Poisson (bell-shaped, not heavy-tailed) sequence is rejected (small p)."""
-    rng = np.random.default_rng(2)
-    degrees = rng.poisson(5, size=3000) + 1  # shift to degrees >= 1
-    res = power_law_gof(degrees, n_bootstrap=200, seed=2)
+    """A tree (body-dominated, not heavy-tailed) is robustly rejected (p ~ 0).
+
+    A balanced tree's degrees pile up at the low end (mostly leaves), so the
+    KS-selected cutoff stays at the bottom where the fit is poor (large D), and the
+    bootstrap rejects across seeds. (A bell-shaped sequence like Poisson/ER is *not*
+    a robust reject case for this single-distribution GOF: its sparse upper tail is
+    weakly power-law-compatible, so the test can call it plausible — that comparison
+    is the job of a likelihood-ratio test against an alternative, not of CSN §4.)
+    """
+    degrees = [d for _, d in nx.balanced_tree(2, 7).degree()]  # N=255
+    res = power_law_gof(degrees, n_bootstrap=200, seed=0)
     assert not res["plausible"]
     assert res["p_value"] < 0.1
 

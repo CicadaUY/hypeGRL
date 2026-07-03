@@ -30,6 +30,14 @@ from scipy.special import zeta
 # valid for the PSO model, which requires gamma >= 2.
 DEFAULT_GAMMA = 2.5
 
+# Minimum number of degrees a candidate tail must retain to be an eligible cutoff.
+# CSN §3.2: "n ≳ 50 is a reasonable rule of thumb for extracting reliable parameter
+# estimates. Data sets smaller than this should be treated with caution." CSN give
+# 50 as advisory guidance on estimate reliability; using it as a hard filter on
+# candidate cutoffs (below) is our design choice. It bounds tail size, not the
+# exponent — gamma is left uncapped (HyperMap/E-PSO admits any gamma >= 2).
+DEFAULT_MIN_TAIL = 50
+
 
 def _gamma_mle(tail_degrees: np.ndarray, k_min: float) -> float:
     """Discrete power-law MLE for the exponent (CSN Eq. 3.7).
@@ -87,7 +95,7 @@ def _discrete_power_law_sampler(gamma: float, k_min: int, kmax: int):
     return draw
 
 
-def choose_kmin_ks(degrees) -> dict | None:
+def choose_kmin_ks(degrees, min_tail: int = DEFAULT_MIN_TAIL) -> dict | None:
     """Choose the power-law lower cutoff ``k_min`` by KS minimisation (CSN §3.3).
 
     For every candidate cutoff, fit ``gamma`` on the degrees at or above it and
@@ -105,10 +113,22 @@ def choose_kmin_ks(degrees) -> dict | None:
     distinct degrees. With fewer than two candidates left (fewer than three
     distinct degrees), the cutoff is undefined and this returns ``None``.
 
+    Candidates whose tail retains fewer than ``min_tail`` degrees are also skipped:
+    pure KS minimisation keeps shrinking as the tail shrinks, so on a bell-shaped
+    (non-power-law) degree sequence it would otherwise wander far into the sparse
+    tail and report a spuriously steep exponent off a handful of points. The floor
+    keeps the selected fit statistically supported (see ``DEFAULT_MIN_TAIL``). It
+    bounds tail size only — the exponent stays uncapped. When no candidate retains
+    ``min_tail`` degrees (e.g. a graph too small to have a well-supported tail),
+    this returns ``None``.
+
     Parameters
     ----------
     degrees:
         Iterable of node degrees (e.g. ``[d for _, d in G.degree()]``).
+    min_tail:
+        Minimum number of degrees a candidate tail must retain to be eligible
+        (default :data:`DEFAULT_MIN_TAIL`). Pass ``1`` to disable the floor.
 
     Returns
     -------
@@ -116,7 +136,8 @@ def choose_kmin_ks(degrees) -> dict | None:
         ``{"k_min", "gamma", "ks", "n_tail"}`` for the best cutoff, where ``ks``
         is the (unitless, in ``[0, 1]``) KS distance — a large value means the
         degree distribution is not well described by a power law (e.g. a tree).
-        Returns ``None`` when there are fewer than three distinct degrees.
+        Returns ``None`` when fewer than three distinct degrees exist, or when no
+        candidate cutoff retains at least ``min_tail`` degrees.
     """
     degrees = np.asarray([d for d in degrees if d >= 1], dtype=float)
     candidates = np.unique(degrees)[:-1]  # drop the largest (its tail is one value)
@@ -126,6 +147,8 @@ def choose_kmin_ks(degrees) -> dict | None:
     best: dict | None = None
     for k_min in candidates:
         tail = degrees[degrees >= k_min]
+        if tail.size < min_tail:  # too few points for a reliable fit (CSN §3.2)
+            continue
         gamma = _gamma_mle(tail, k_min)
         ks = _ks_distance(tail, k_min, gamma)
         if best is None or ks < best["ks"]:
@@ -151,10 +174,10 @@ def estimate_gamma(
       (:func:`choose_kmin_ks`).
     - passing an explicit integer uses that cutoff directly.
 
-    When a cutoff cannot be selected (fewer than three distinct degrees, so
-    :func:`choose_kmin_ks` returns ``None``), the degree distribution is not
-    power-law and no exponent is meaningful. Rather than fit a biased — possibly
-    invalid, i.e. ``< 2`` — value, this returns ``fallback_gamma`` with a warning.
+    When a cutoff cannot be selected (:func:`choose_kmin_ks` returns ``None`` —
+    too few distinct degrees, or no cutoff with a well-supported tail), no
+    exponent is meaningful. Rather than fit a biased — possibly invalid, i.e.
+    ``< 2`` — value, this returns ``fallback_gamma`` with a warning.
 
     Returns
     -------
@@ -171,9 +194,9 @@ def estimate_gamma(
         chosen = choose_kmin_ks(degrees)
         if chosen is None:
             warnings.warn(
-                "estimate_gamma: cannot select a power-law cutoff (fewer than three "
-                "distinct degrees) — the degree distribution is not power-law; using "
-                f"fallback gamma={fallback_gamma}. Pass k_min (or gamma) explicitly to "
+                "estimate_gamma: cannot select a power-law cutoff (too few distinct "
+                "degrees, or no cutoff with a well-supported tail) — using fallback "
+                f"gamma={fallback_gamma}. Pass k_min (or gamma) explicitly to "
                 "override.",
                 stacklevel=2,
             )
@@ -191,7 +214,7 @@ def estimate_gamma(
 GOF_PLAUSIBLE_P = 0.1
 
 
-def power_law_gof(degrees, n_bootstrap: int = 1000, seed=None) -> dict | None:
+def power_law_gof(degrees, n_bootstrap: int = 2000, seed=None) -> dict | None:
     """Goodness-of-fit test for the power-law hypothesis (CSN §4 bootstrap).
 
     Answers *"is a power law even a plausible model for this degree sequence?"* —
@@ -213,9 +236,10 @@ def power_law_gof(degrees, n_bootstrap: int = 1000, seed=None) -> dict | None:
        record its KS distance ``D_synth``.
     4. ``p = fraction of synthetic sequences with D_synth >= D``.
 
-    Interpretation (the commonly-misread part): a **small** ``p`` (CSN use the
-    threshold ``< 0.1``) **rejects** the power law; a **large** ``p`` only means the
-    power law is *plausible*, not that it is correct or the best of competing models.
+    Interpretation (the commonly-misread part, see CSN §4): a **small** ``p`` (CSN
+    use the threshold ``< 0.1``) **rejects** the power law; a **large** ``p`` only
+    means the power law is *plausible*, not that it is correct or the best of
+    competing models.
 
     Parameters
     ----------
