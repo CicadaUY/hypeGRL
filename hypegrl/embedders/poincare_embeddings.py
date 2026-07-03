@@ -498,6 +498,7 @@ class PoincareEmbeddingsEmbedder(HyperbolicEmbedder):
         self._loss_history  = loss_history
         self._unknown_edges = unknown_edges
         self._G             = G
+        self._nodes         = list(G.nodes())  # rows follow G.nodes() (no reorder)
         return self
 
     def _optimize_phase(

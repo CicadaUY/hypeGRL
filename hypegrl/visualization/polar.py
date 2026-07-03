@@ -55,12 +55,11 @@ def plot_polar(
 
     Node-row mapping
     ----------------
-    ``X[i]`` is assumed to correspond to node ``nodes[i]``. Some embedders reorder
-    nodes during fitting (e.g. :class:`DMercatorEmbedder` and
-    :class:`HyperMapEmbedder` expose an ``embedder.nodes`` ordering that the rows
-    of ``embeddings()`` follow); pass that ordering as ``nodes``. If ``nodes`` is
-    ``None``, the rows are assumed to be indexed by integer node labels ``0..N-1``
-    (matching ``G``).
+    ``X[i]`` is assumed to correspond to node ``nodes[i]``. Every embedder reports
+    the row order of its ``embeddings()`` via ``embedder.nodes()`` — pass that as
+    ``nodes`` (essential for reordering embedders like ``HyperMapEmbedder`` and
+    ``DMercatorEmbedder``). If ``nodes`` is ``None``, the rows are assumed to be
+    indexed by integer node labels ``0..N-1`` (matching ``G``).
 
     Parameters
     ----------
@@ -70,7 +69,7 @@ def plot_polar(
         ``(N, 2)`` array of Poincaré-ball embeddings.
     nodes:
         Sequence mapping row index ``i`` of ``X`` to a node label in ``G``.
-        Defaults to ``range(N)``. Typically ``embedder.nodes``.
+        Defaults to ``range(N)``. Typically ``embedder.nodes()``.
     unknown_edges:
         List of ``(m, n)`` node-label tuples to render as dashed edges, drawn for
         visual reference whether or not they exist in ``G`` (no weight
@@ -114,7 +113,7 @@ def plot_polar(
     >>> from hypegrl.visualization import plot_polar
     >>> G = nx.karate_club_graph()
     >>> emb = DMercatorEmbedder(d=2, random_state=0).fit(G)
-    >>> fig = plot_polar(G, emb.embeddings(), nodes=emb.nodes)
+    >>> fig = plot_polar(G, emb.embeddings(), nodes=emb.nodes())
     """
     assert X.shape[1] == 2, (
         "plot_polar draws the polar (native) representation, which is 2D; "

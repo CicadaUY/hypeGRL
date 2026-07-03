@@ -336,7 +336,7 @@ class HyperMapEmbedder(HyperbolicEmbedder):
         self._unknown_edges : list[tuple[int, int]]          = []
         self._G             : Optional[nx.Graph]             = None
         self._params        : Optional[dict]                 = None
-        self._nodes_sorted  : Optional[list]                 = None
+        self._nodes  : Optional[list]                 = None
         self._thetas_init   : Optional[np.ndarray]           = None
         self._r_init        : Optional[np.ndarray]           = None
         self._R             : Optional[np.ndarray]           = None
@@ -363,10 +363,10 @@ class HyperMapEmbedder(HyperbolicEmbedder):
             Edges treated as unknown; jointly optimised with embeddings.
         X_init:
             ``(N, d)`` initial Poincaré ball embeddings for the gradient
-            refinement step.  Rows must be ordered to match
-            :attr:`nodes_sorted` (degree-descending).  If ``None`` (or if
-            this is the first call), the greedy HyperMap initialisation is
-            run to produce the starting point.
+            refinement step.  Rows must be in degree-descending order (the order
+            :meth:`nodes` reports).  If ``None`` (or if this is the first call),
+            the greedy HyperMap initialisation is run to produce the starting
+            point.
         a_omega_init:
             Initial estimates for the unknown edges. If `None`, then this is
             estimated as the mean degree of the corresponding node.
@@ -386,7 +386,7 @@ class HyperMapEmbedder(HyperbolicEmbedder):
         # ── Stage 1: greedy initialization (always 2D) ───────────────────
         # Run when X_init is not provided or on the first call (no cached
         # node ordering yet).
-        if X_init is None or self._nodes_sorted is None:
+        if X_init is None or self._nodes is None:
             thetas, r_final, nodes_sorted, params = hypermap_init(
                 G,
                 gamma       = self.gamma,
@@ -398,7 +398,7 @@ class HyperMapEmbedder(HyperbolicEmbedder):
             )
             self._thetas_init  = thetas
             self._r_init       = r_final
-            self._nodes_sorted = nodes_sorted
+            self._nodes = nodes_sorted
             self._params       = params
 
             _, R, _ = assign_radii(params)
@@ -430,9 +430,9 @@ class HyperMapEmbedder(HyperbolicEmbedder):
         # as sets, and the C++ reads an unweighted edgelist). Passing edge weights
         # through would make ``(1 - A_ij)`` negative for A_ij > 1 and drive the
         # "NLL" unbounded below (e.g. nx.karate_club_graph carries weights 1-7).
-        order = {node: idx for idx, node in enumerate(self._nodes_sorted)}
+        order = {node: idx for idx, node in enumerate(self._nodes)}
         G_sorted = nx.Graph()
-        G_sorted.add_nodes_from(range(len(self._nodes_sorted)))
+        G_sorted.add_nodes_from(range(len(self._nodes)))
         G_sorted.add_edges_from(
             (order[u], order[v]) for u, v in G.edges()
         )
@@ -477,13 +477,13 @@ class HyperMapEmbedder(HyperbolicEmbedder):
         """
         Return ``(N, d)`` Poincaré ball embeddings.
 
-        Row order matches :attr:`nodes_sorted` (degree-descending), **not**
-        ``G.nodes()`` order. Anything that pairs these rows back with the graph
-        must account for this — e.g. when plotting with
-        :func:`~hypegrl.visualization.disk.plot_poincare_graph`, pass the row
-        order via its ``nodes`` argument::
+        Row order is degree-descending — :meth:`nodes` gives the exact ordering —
+        **not** ``G.nodes()`` order. Anything that pairs these rows back with the
+        graph must account for this — e.g. when plotting with
+        :func:`~hypegrl.visualization.disk.plot_poincare_graph`, pass the row order
+        via its ``nodes`` argument::
 
-            plot_poincare_graph(G, emb.embeddings(), nodes=emb.nodes_sorted)
+            plot_poincare_graph(G, emb.embeddings(), nodes=emb.nodes())
 
         Raises
         ------
@@ -583,10 +583,10 @@ class HyperMapEmbedder(HyperbolicEmbedder):
         Parameters
         ----------
         X:
-            ``(N, d)`` embedding to read ``T`` from (rows in ``nodes_sorted``
+            ``(N, d)`` embedding to read ``T`` from (rows in :meth:`nodes`
             order). Defaults to the current fitted embedding.
         A:
-            ``(N, N)`` binary adjacency in ``nodes_sorted`` order. Defaults to the
+            ``(N, N)`` binary adjacency in :meth:`nodes` order. Defaults to the
             fitted graph's adjacency.
 
         Returns
@@ -599,10 +599,10 @@ class HyperMapEmbedder(HyperbolicEmbedder):
         if X is None:
             X = self.embeddings()
         if A is None:
-            if self._G is None or self._nodes_sorted is None:
+            if self._G is None or self._nodes is None:
                 raise RuntimeError("Call fit() before estimate_temperature().")
-            order = {node: i for i, node in enumerate(self._nodes_sorted)}
-            N = len(self._nodes_sorted)
+            order = {node: i for i, node in enumerate(self._nodes)}
+            N = len(self._nodes)
             A = np.zeros((N, N))
             for u_node, v_node in self._G.edges():
                 i, j = order[u_node], order[v_node]
@@ -740,11 +740,6 @@ class HyperMapEmbedder(HyperbolicEmbedder):
         if self._X is None:
             return None
         return poincare_to_hyperspherical(self._X, self.zeta)
-
-    @property
-    def nodes_sorted(self) -> Optional[list]:
-        """Node IDs in degree-descending order (embedding row order)."""
-        return self._nodes_sorted
 
     @property
     def loss_history(self) -> Optional[list[float]]:

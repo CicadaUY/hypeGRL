@@ -389,11 +389,6 @@ class DMercatorEmbedder(HyperbolicEmbedder):
         return self._r
 
     @property
-    def nodes(self) -> Optional[list]:
-        """Node ordering used during fitting (matches row order of embeddings)."""
-        return self._nodes
-
-    @property
     def loss_history(self) -> Optional[list[float]]:
         """Fermi-Dirac NLL at each optimisation step."""
         return self._loss_history

@@ -205,6 +205,7 @@ class HydraPlusEmbedder(HydraEmbedder):
         self._loss_history = loss_history
         self._D            = D
         self._G            = None
+        self._nodes        = list(range(D.shape[0]))  # rows follow matrix index order
 
         D_hat = self.decode(X_refined)
         self._stress = float(np.sqrt(np.sum((D_hat[mask_np] - D[mask_np]) ** 2)))
@@ -265,6 +266,7 @@ class HydraPlusEmbedder(HydraEmbedder):
 
         # Keep track of graph source for evaluation compliance
         self._G = G
+        self._nodes = list(G.nodes())  # rows follow G.nodes() (no reorder)
 
         return self
 

@@ -49,7 +49,7 @@ It is common to write :math:`\mathbf{u}=(\mathbf{x},t)`, where the last coordina
 The Lorentz model admits simple closed-form expressions for distances and gradients and provides a convenient global parametrization of hyperbolic space, making it particularly well suited for both theoretical analysis and optimization. This motivates its use as the default representation in ``HypeGRL``. Moreover, several alternative representations of hyperbolic space can be naturally interpreted in terms of the Lorentz model.
 
 Spherical (or native) representation
----------------------
+------------------------------------
 The spherical representation of hyperbolic space is the polar parametrization in terms of a radial coordinate :math:`r` (hyperbolic distance to the point at :math:`\mathbf{x}=\mathbf{0}` and :math:`t=1`) and angular coordinates :math:`\theta=(\theta_1,\theta_2,\ldots,\theta_{n-1})`.
 
 .. figure:: ../figs/hyperboloide_to_native.svg

@@ -598,7 +598,7 @@ def test_dmercator_n_steps_zero_returns_init(karate):
 def test_dmercator_reconstructs_adjacency(dmercator_fitted, karate):
     # The decoder must assign higher connection probability to actual edges
     # than to non-edges — a dependency-free proxy for embedding quality.
-    A = nx.to_numpy_array(karate, nodelist=dmercator_fitted.nodes, weight=None)
+    A = nx.to_numpy_array(karate, nodelist=dmercator_fitted.nodes(), weight=None)
     P = dmercator_fitted.decode(dmercator_fitted.embeddings())
     mask = np.triu(np.ones_like(A, dtype=bool), k=1)
     assert P[mask][A[mask] == 1].mean() > P[mask][A[mask] == 0].mean()
@@ -609,7 +609,7 @@ def test_dmercator_radial_anticorrelates_with_degree(dmercator_fitted, karate):
     # High-degree (popular) nodes get small radial coordinate r_i (near the
     # centre); low-degree nodes are pushed out toward the boundary. So degree
     # and radius are strongly *anti*-correlated. nodes order matches embeddings.
-    deg = np.array([karate.degree(n) for n in dmercator_fitted.nodes])
+    deg = np.array([karate.degree(n) for n in dmercator_fitted.nodes()])
     corr = np.corrcoef(deg, dmercator_fitted.radial)[0, 1]
     assert corr < -0.5
 
@@ -618,7 +618,7 @@ def test_dmercator_kappa_positive_and_tracks_degree(dmercator_fitted, karate):
     # κ_i (hidden degree) is recovered from the refined radius via the inverse
     # of Eq. 7; it must stay positive and, like an effective degree, correlate
     # positively with the observed degree.
-    deg = np.array([karate.degree(n) for n in dmercator_fitted.nodes])
+    deg = np.array([karate.degree(n) for n in dmercator_fitted.nodes()])
     assert (dmercator_fitted.kappa > 0).all()
     assert np.corrcoef(deg, dmercator_fitted.kappa)[0, 1] > 0.5
 
@@ -823,7 +823,7 @@ def test_hypermap_refinement_adjacency_matches_embedding_order():
     emb0 = HyperMapEmbedder(n_steps=0, **common)
     emb0.fit(G)
     X_init       = emb0.embeddings()
-    nodes_sorted = emb0.nodes_sorted
+    nodes_sorted = emb0.nodes()
     assert nodes_sorted != list(G.nodes()), "test graph must reorder the nodes"
 
     z2t = emb0.zeta / (2.0 * emb0.T)
@@ -892,6 +892,25 @@ def test_hypermap_estimate_temperature_requires_fit():
     """estimate_temperature before fit raises rather than reading uninitialised R."""
     with pytest.raises(RuntimeError):
         HyperMapEmbedder().estimate_temperature()
+
+
+def test_nodes_accessor_uniform_across_embedders(karate):
+    """Every embedder reports its embeddings() row order via the same nodes() method.
+
+    Non-reordering methods (Poincaré Maps) return ``G.nodes()`` order; reordering
+    ones (HyperMap, by degree) return their permutation. ``None`` before fit.
+    """
+    pm = PoincareMapsEmbedder(d=2, n_steps=5, log_every=0)
+    assert pm.nodes() is None                          # before fit
+    pm.fit(karate)
+    assert pm.nodes() == list(karate.nodes())          # kept G.nodes() order
+
+    hm = HyperMapEmbedder(d=2, gamma=2.5, T=0.5, n_steps=0, log_every=0,
+                          verbose_init=False)
+    hm.fit(karate)
+    assert sorted(hm.nodes()) == sorted(karate.nodes())  # a permutation of the nodes
+    assert hm.nodes() != list(karate.nodes())            # ...actually reordered
+    assert len(hm.nodes()) == hm.embeddings().shape[0]   # aligned with the rows
 
 
 def test_dmercator_x_init_equivalent_to_default(karate):

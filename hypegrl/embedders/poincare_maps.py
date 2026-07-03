@@ -327,6 +327,7 @@ class PoincareMapsEmbedder(HyperbolicEmbedder):
         self._loss_history  = result["loss_history"]
         self._unknown_edges = unknown_edges
         self._G             = G
+        self._nodes         = list(G.nodes())  # rows follow G.nodes() (no reorder)
         return self
 
     def distance(self, X: torch.Tensor, A: torch.Tensor) -> torch.Tensor:

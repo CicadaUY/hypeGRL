@@ -46,13 +46,14 @@ def plot_poincare_graph(
        that node is the ``i``-th of ``G.nodes()`` — but some embedders reorder
        nodes and break this silently, notably
        :class:`~hypegrl.embedders.hypermap.HyperMapEmbedder`, whose
-       ``embeddings()`` rows follow ``nodes_sorted`` (degree-descending), *not*
-       ``G.nodes()`` order. Passing ``plot_poincare_graph(G, emb.embeddings())``
-       directly then pairs every node with the wrong point and the plot looks like
-       noise. Pass the embedding's node order via ``nodes`` so the alignment is
-       handled for you::
+       ``embeddings()`` rows follow degree-descending order, *not* ``G.nodes()``
+       order. Passing ``plot_poincare_graph(G, emb.embeddings())`` directly then
+       pairs every node with the wrong point and the plot looks like noise. Pass
+       the embedding's node order — which every embedder reports via
+       :meth:`~hypegrl.embedders.base.HyperbolicEmbedder.nodes` — through the
+       ``nodes`` argument so the alignment is handled for you::
 
-           plot_poincare_graph(G, emb.embeddings(), nodes=emb.nodes_sorted)
+           plot_poincare_graph(G, emb.embeddings(), nodes=emb.nodes())
 
        Embedders that keep ``G.nodes()`` order (e.g. ``PoincareMapsEmbedder``,
        which builds its matrices with ``nx.to_numpy_array(G)``) can omit ``nodes``.
@@ -98,7 +99,7 @@ def plot_poincare_graph(
     figsize:
         Figure size in inches, used only when ``ax`` is ``None``.
     nodes:
-        Node label for each row of ``X`` (e.g. ``emb.nodes_sorted``): ``nodes[i]``
+        Node label for each row of ``X`` (typically ``emb.nodes()``): ``nodes[i]``
         is the node whose embedding is ``X[i]``. Use this when the embedding rows
         are not in ``G.nodes()`` order (see the warning above). When ``None``
         (default), row ``i`` is assumed to be the ``i``-th node of ``G.nodes()``.

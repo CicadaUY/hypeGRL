@@ -64,6 +64,22 @@ class HyperbolicEmbedder(ABC):
         Must be called after :meth:`fit`.
         """
 
+    def nodes(self) -> Optional[list]:
+        """
+        Node labels in the row order of :meth:`embeddings` — ``nodes()[i]`` is the
+        node whose embedding is row ``i``. Returns ``None`` before :meth:`fit`.
+
+        This is the single accessor for row↔node alignment across all embedders.
+        Methods that reorder nodes report that order here (e.g. HyperMap sorts by
+        degree); methods that keep the input order return ``list(G.nodes())``. Pass
+        it to a plotter's ``nodes=`` argument to align a plot with the embedding::
+
+            plot_polar(G, emb.embeddings(), nodes=emb.nodes())
+
+        Concrete embedders record the order in ``self._nodes`` during :meth:`fit`.
+        """
+        return getattr(self, "_nodes", None)
+
     @abstractmethod
     def structural_similarity(self, G: nx.Graph) -> np.ndarray:
         """

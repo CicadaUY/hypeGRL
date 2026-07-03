@@ -322,6 +322,7 @@ class HydraEmbedder(HyperbolicEmbedder):
         self._strain        = result["strain"]
         self._D             = D
         self._G             = None  # Reset graph state since input is a raw distance matrix
+        self._nodes         = list(range(D.shape[0]))  # rows follow matrix index order
 
         # Cartesian Poincaré coordinates: x_i = r_i * dir_i  ∈  B^dim
         self._X = self._r[:, None] * self._directional  # (N, dim)
@@ -370,6 +371,7 @@ class HydraEmbedder(HyperbolicEmbedder):
 
         # --- Keep track of the graph source -------------------------------
         self._G = G
+        self._nodes = list(G.nodes())  # rows follow G.nodes() (no reorder)
 
         return self
 
