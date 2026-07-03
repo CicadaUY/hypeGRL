@@ -37,7 +37,10 @@ classifiers = [
 
 dependencies = [
     "torch>=2.0",
-    "geoopt>=0.5",
+    # Upper-bounded: StableLorentz (manifolds/lorentz.py) overrides an internal
+    # retraction path (RiemannianAdam moves points via retr_transp -> retr), not
+    # a promised public API, so a new minor could silently bypass its NaN guard.
+    "geoopt>=0.5,<0.6",
     "networkx>=3.0",
     "numpy>=1.24",
     "scipy>=1.10",

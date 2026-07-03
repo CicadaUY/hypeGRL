@@ -95,7 +95,11 @@ class StableLorentz(geoopt.Lorentz):
         return self._clamp_to_hyperboloid(res, dim=dim)
 
     # RiemannianAdam moves points via retr_transp -> retr; keep retr == expmap
-    # (as in geoopt.Lorentz) so the clamp bounds every optimiser step.
+    # (as in geoopt.Lorentz) so the clamp bounds every optimiser step. This
+    # relies on geoopt's internal retraction routing, not a promised public API,
+    # so the geoopt dependency is upper-bounded in pyproject.toml — a new minor
+    # could route around this and silently disable the guard (caught by
+    # tests/test_embedders.py::test_lorentz_embeddings_stable_on_deep_tree).
     retr = expmap
 
 
