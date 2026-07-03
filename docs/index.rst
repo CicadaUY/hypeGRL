@@ -35,6 +35,7 @@ hypeGRL
    tutorials/streaming
    tutorials/graph_generation
    tutorials/hypermap_tree_vs_powerlaw
+   tutorials/poincare_vs_lorentz
 
 .. toctree::
    :maxdepth: 2
