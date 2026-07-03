@@ -17,9 +17,20 @@ distance becomes ``NaN``. Clamping ``||x'|| <= max_norm`` after each retraction
 and projection keeps points in the numerically safe region, mirroring the
 reference implementation's ``set_dim0`` renorm (Nickel & Kiela 2018; the
 theSage21 PyTorch port renorms the spatial part to ``maxnorm=1e2`` with the
-comment *"otherwise leaves will explode"*). At ``max_norm=1e2`` the reachable
-Poincaré radius is ``100/101 ≈ 0.99``, so leaves can still sit essentially on
-the boundary — the clamp only removes the overflow tail.
+comment *"otherwise leaves will explode"*).
+
+Choosing ``max_norm``. It is not purely a safety valve — it also *regularises*
+how far leaves may spread, well below the float64 overflow ceiling
+(``||x'|| ≈ 1e154``). A sweep over trees / karate / Les Misérables showed a
+usable window of roughly ``1e2``–``1e4``: values that bind *below* the natural
+radius hurt reconstruction, and very large values (``≳ 1e6``) let the
+optimisation run away and degrade quality (AUC collapses on trees at high
+learning rate). The default ``1e3`` dominated the reference's ``1e2`` across
+that sweep (equal on trees, which never reach it; ``+0.8`` AUC on denser graphs
+that do) while staying three orders clear of the runaway regime. At
+``max_norm=1e3`` the reachable Poincaré radius is ``≈ 0.999``, so leaves still
+sit essentially on the boundary. It is exposed as a constructor argument (here
+and on ``LorentzEmbeddingsEmbedder``) because the optimum is graph-dependent.
 
 The clamp is a no-op for points already inside ``max_norm`` (small graphs never
 reach it), and is defined here on the manifold — not inside an embedder — so
@@ -49,12 +60,14 @@ class StableLorentz(geoopt.Lorentz):
     learnable:
         Whether ``k`` is a learnable parameter (passed through).
     max_norm:
-        Maximum allowed spatial norm ``||x'||``. Default ``1e2`` follows the
-        reference implementation and permits a Poincaré radius up to
-        ``max_norm / (sqrt(1 + max_norm^2) + 1) ≈ 0.99``.
+        Maximum allowed spatial norm ``||x'||``. Default ``1e3`` (hypeGRL's
+        sweep-tuned value; the reference implementation uses ``1e2``) permits a
+        Poincaré radius up to ``max_norm / (sqrt(1 + max_norm^2) + 1) ≈ 0.999``.
+        See the module docstring for how the value trades off spread against
+        the runaway regime.
     """
 
-    def __init__(self, k: float = 1.0, learnable: bool = False, max_norm: float = 1e2):
+    def __init__(self, k: float = 1.0, learnable: bool = False, max_norm: float = 1e3):
         super().__init__(k=k, learnable=learnable)
         self.max_norm = max_norm
 

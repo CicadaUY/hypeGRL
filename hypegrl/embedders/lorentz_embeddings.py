@@ -28,9 +28,10 @@ the origin per Eq. 6: ``x' ~ U(-init_scale, init_scale)`` with
 **Numerical stability.** The exponential map scales coordinates by
 ``cosh(||v||_L)``, so one high-learning-rate step toward the boundary can
 overflow ``x_0`` and turn every distance into ``NaN`` — the well-known failure
-of naive hyperboloid optimisation on leaf-heavy graphs. ``StableLorentz`` clamps
-each point's spatial norm to ``max_norm`` (default ``1e2``, Poincaré radius
-``≈ 0.99``) after every retraction, mirroring the reference implementation's
+of naive hyperboloid optimisation on leaf-heavy graphs. The embedder builds its
+own ``StableLorentz`` (with the ``max_norm`` constructor argument) which clamps
+each point's spatial norm to ``max_norm`` (default ``1e3``, Poincaré radius
+``≈ 0.999``) after every retraction, mirroring the reference implementation's
 ``set_dim0`` renorm. This is what lets the embedder use an aggressive learning
 rate (and reach the near-boundary radii that encode generality) without
 diverging.
@@ -127,7 +128,7 @@ import torch
 from hypegrl.embedders.base import HyperbolicEmbedder
 from hypegrl.inference.joint_optimizer import joint_optimize
 from hypegrl.inference.riemannian_optimizer import riemannian_optimize
-from hypegrl.manifolds.lorentz import LORENTZ
+from hypegrl.manifolds.lorentz import LORENTZ, StableLorentz
 from hypegrl.manifolds.poincare import lorentz_to_poincare, poincare_to_lorentz
 
 # ---------------------------------------------------------------------------
@@ -335,6 +336,13 @@ class LorentzEmbeddingsEmbedder(HyperbolicEmbedder):
         of the spatial coordinates ``x'`` (with ``x_0 = sqrt(1 + ||x'||^2)``,
         Eq. 6), used when ``X_init`` is not supplied. Default ``1e-3`` follows
         the paper's ``U(-0.001, 0.001)``.
+    max_norm:
+        Spatial-norm clamp of the ``StableLorentz`` manifold this embedder
+        builds. Bounds how far leaves spread (and prevents the hyperboloid
+        overflow). Default ``1e3`` is sweep-tuned; it caps the reachable radius
+        but also regularises spread — too small binds below the natural radius
+        and hurts, too large (``≳1e6``) lets the fit run away. See the
+        ``manifolds.lorentz`` docstring.
     random_state:
         Seed for reproducible initialisation and negative sampling.
 
@@ -364,6 +372,7 @@ class LorentzEmbeddingsEmbedder(HyperbolicEmbedder):
         log_every: int = 50,
         device: str = "cpu",
         init_scale: float = 1e-3,     # paper: U(-0.001, 0.001)
+        max_norm: float = 1e3,        # sweep-tuned (reference uses 1e2)
         random_state: Optional[int] = None,
     ):
         self.d            = d
@@ -376,7 +385,12 @@ class LorentzEmbeddingsEmbedder(HyperbolicEmbedder):
         self.log_every    = log_every
         self.device       = device
         self.init_scale   = init_scale
+        self.max_norm     = max_norm
         self.random_state = random_state
+
+        # Per-instance manifold so max_norm is tunable without mutating the
+        # shared LORENTZ. Stateless besides (k, max_norm), so this is cheap.
+        self.manifold = StableLorentz(max_norm=max_norm)
 
         self._X: Optional[np.ndarray]              = None   # Poincaré ball (N, d)
         self._X_hyper: Optional[np.ndarray]        = None   # hyperboloid (N, d+1)
@@ -441,7 +455,7 @@ class LorentzEmbeddingsEmbedder(HyperbolicEmbedder):
                 X_init    = X_init,
                 s_A       = self.structural_similarity(G),
                 loss_fn   = self.distance,
-                manifold  = LORENTZ,
+                manifold  = self.manifold,
                 lr        = self.lr_X,
                 n_steps   = self.n_steps,
                 grad_clip = self.grad_clip,
@@ -454,7 +468,7 @@ class LorentzEmbeddingsEmbedder(HyperbolicEmbedder):
                 G             = G,
                 loss_fn       = self.distance,
                 X_init        = X_init,
-                manifold      = LORENTZ,
+                manifold      = self.manifold,
                 unknown_edges = unknown_edges,
                 a_omega_init  = a_omega_init,
                 lr_X          = self.lr_X,
@@ -497,7 +511,7 @@ class LorentzEmbeddingsEmbedder(HyperbolicEmbedder):
         """
         weighted = len(self._unknown_edges) > 0
         return lorentz_ranking_nll(
-            X, A, self.n_negatives, self._unknown_mask, weighted, LORENTZ
+            X, A, self.n_negatives, self._unknown_mask, weighted, self.manifold
         )
 
     def embeddings(self) -> np.ndarray:
@@ -559,7 +573,7 @@ class LorentzEmbeddingsEmbedder(HyperbolicEmbedder):
         ``(N, N)`` NumPy array of hyperbolic distances.
         """
         H = torch.tensor(poincare_to_lorentz(X), dtype=torch.float64)
-        return lorentz_distance_matrix(H).detach().numpy()
+        return lorentz_distance_matrix(H, self.manifold).detach().numpy()
 
     # ------------------------------------------------------------------
     # Capability flags
