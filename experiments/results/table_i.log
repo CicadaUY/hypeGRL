@@ -1,0 +1,260 @@
+2026-07-06 17:48:36.335294: E external/local_xla/xla/stream_executor/cuda/cuda_fft.cc:485] Unable to register cuFFT factory: Attempting to register factory for plugin cuFFT when one has already been registered
+2026-07-06 17:48:36.348452: E external/local_xla/xla/stream_executor/cuda/cuda_dnn.cc:8454] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+2026-07-06 17:48:36.352757: E external/local_xla/xla/stream_executor/cuda/cuda_blas.cc:1452] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+2026-07-06 17:48:36.363356: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+2026-07-06 17:48:37.083249: W tensorflow/compiler/tf2tensorrt/utils/py_utils.cc:38] TF-TRT Warning: Could not find TensorRT
+Step    0 | Loss: 3700.016795
+Step   50 | Loss: 948.808288
+Step  100 | Loss: 527.694394
+Step  150 | Loss: 389.328699
+Step  200 | Loss: 366.759164
+Step  250 | Loss: 366.312590
+Step  300 | Loss: 366.326040
+Step  350 | Loss: 366.315818
+Step  400 | Loss: 366.327954
+Step  450 | Loss: 366.311709
+Step  499 | Loss: 366.317325
+Step    0 | Loss: 4364.188946
+Step   50 | Loss: 1425.489449
+Step  100 | Loss: 824.330440
+Step  150 | Loss: 560.709029
+Step  200 | Loss: 434.364948
+Step  250 | Loss: 376.451278
+Step  300 | Loss: 350.324197
+Step  350 | Loss: 349.745974
+Step  400 | Loss: 349.699488
+Step  450 | Loss: 349.690036
+Step  499 | Loss: 349.695575
+Step    0 | Loss: 3549.703887
+Step   50 | Loss: 900.979923
+Step  100 | Loss: 424.936423
+Step  150 | Loss: 281.148499
+Step  200 | Loss: 265.009800
+Step  250 | Loss: 264.888416
+Step  300 | Loss: 264.891465
+Step  350 | Loss: 264.899243
+Step  400 | Loss: 264.884613
+Step  450 | Loss: 264.886730
+Step  499 | Loss: 264.883334
+Step    0 | Loss: 3315.185803
+Step   50 | Loss: 679.995892
+Step  100 | Loss: 320.196040
+Step  150 | Loss: 281.444255
+Step  200 | Loss: 281.228835
+Step  250 | Loss: 281.219040
+Step  300 | Loss: 281.210883
+Step  350 | Loss: 281.215974
+Step  400 | Loss: 281.208775
+Step  450 | Loss: 281.214950
+Step  499 | Loss: 281.214217
+Step    0 | Loss: 3261.920559
+Step   50 | Loss: 765.785098
+Step  100 | Loss: 319.104055
+Step  150 | Loss: 209.797082
+Step  200 | Loss: 207.622708
+Step  250 | Loss: 207.594340
+Step  300 | Loss: 207.594726
+Step  350 | Loss: 207.603455
+Step  400 | Loss: 207.596451
+Step  450 | Loss: 207.598418
+Step  499 | Loss: 207.594623
+  [β infer]  β=1.6370  c̄=0.2901  (target 0.6584)
+  [β infer]  β=2.4554  c̄=0.4390  (target 0.6584)
+  [β infer]  β=3.6832  c̄=0.5888  (target 0.6584)
+  [β infer]  β=5.5247  c̄=0.6697  (target 0.6584)
+  [β infer]  β=4.6040  c̄=0.6431  (target 0.6584)
+  [β infer]  β=5.0644  c̄=0.6551  (target 0.6584)
+Step    0 | Loss: 1588.213016
+Step   50 | Loss: 1569.919656
+Step  100 | Loss: 1554.026889
+Step  150 | Loss: 1540.617846
+Step  200 | Loss: 1529.028402
+Step  250 | Loss: 1518.795555
+Step  300 | Loss: 1509.630898
+Step  350 | Loss: 1501.346476
+Step  400 | Loss: 1493.805390
+Step  450 | Loss: 1486.896831
+Step  499 | Loss: 1480.648513
+  [β infer]  β=1.5118  c̄=0.2653  (target 0.6528)
+  [β infer]  β=2.2677  c̄=0.4113  (target 0.6528)
+  [β infer]  β=3.4016  c̄=0.5601  (target 0.6528)
+  [β infer]  β=5.1024  c̄=0.6590  (target 0.6528)
+Step    0 | Loss: 1726.200081
+Step   50 | Loss: 1706.109494
+Step  100 | Loss: 1688.544163
+Step  150 | Loss: 1673.434075
+Step  200 | Loss: 1660.249825
+Step  250 | Loss: 1648.633561
+Step  300 | Loss: 1638.324124
+Step  350 | Loss: 1629.118121
+Step  400 | Loss: 1620.851746
+Step  450 | Loss: 1613.386673
+Step  499 | Loss: 1606.732230
+  [β infer]  β=1.2616  c̄=0.2077  (target 0.6531)
+  [β infer]  β=1.8924  c̄=0.3393  (target 0.6531)
+  [β infer]  β=2.8386  c̄=0.4887  (target 0.6531)
+  [β infer]  β=4.2579  c̄=0.6161  (target 0.6531)
+  [β infer]  β=6.3869  c̄=0.6914  (target 0.6531)
+  [β infer]  β=5.3224  c̄=0.6632  (target 0.6531)
+  [β infer]  β=4.7902  c̄=0.6527  (target 0.6531)
+Step    0 | Loss: 1526.625963
+Step   50 | Loss: 1513.239571
+Step  100 | Loss: 1501.533373
+Step  150 | Loss: 1491.785227
+Step  200 | Loss: 1483.471369
+Step  250 | Loss: 1476.213497
+Step  300 | Loss: 1469.762766
+Step  350 | Loss: 1463.950199
+Step  400 | Loss: 1458.654489
+Step  450 | Loss: 1453.785319
+Step  499 | Loss: 1449.360990
+  [β infer]  β=1.0856  c̄=0.1696  (target 0.6557)
+  [β infer]  β=1.6285  c̄=0.2866  (target 0.6557)
+  [β infer]  β=2.4427  c̄=0.4417  (target 0.6557)
+  [β infer]  β=3.6641  c̄=0.5928  (target 0.6557)
+  [β infer]  β=5.4961  c̄=0.6708  (target 0.6557)
+  [β infer]  β=4.5801  c̄=0.6407  (target 0.6557)
+  [β infer]  β=5.0381  c̄=0.6572  (target 0.6557)
+Step    0 | Loss: 1583.522301
+Step   50 | Loss: 1570.321328
+Step  100 | Loss: 1558.519097
+Step  150 | Loss: 1548.559554
+Step  200 | Loss: 1540.011952
+Step  250 | Loss: 1532.536702
+Step  300 | Loss: 1525.889962
+Step  350 | Loss: 1519.896561
+Step  400 | Loss: 1514.428829
+Step  450 | Loss: 1509.392262
+Step  499 | Loss: 1504.806336
+  [β infer]  β=1.9431  c̄=0.3550  (target 0.6579)
+  [β infer]  β=2.9146  c̄=0.5179  (target 0.6579)
+  [β infer]  β=4.3719  c̄=0.6237  (target 0.6579)
+  [β infer]  β=6.5578  c̄=0.7011  (target 0.6579)
+  [β infer]  β=5.4648  c̄=0.6737  (target 0.6579)
+  [β infer]  β=4.9184  c̄=0.6543  (target 0.6579)
+Step    0 | Loss: 1511.949670
+Step   50 | Loss: 1503.064695
+Step  100 | Loss: 1494.898239
+Step  150 | Loss: 1488.108986
+Step  200 | Loss: 1482.343638
+Step  250 | Loss: 1477.336342
+Step  300 | Loss: 1472.905131
+Step  350 | Loss: 1468.919509
+Step  400 | Loss: 1465.283562
+Step  450 | Loss: 1461.926865
+Step  499 | Loss: 1458.859088
+Step    0 | Loss: 13423.249597
+Step   19 | Loss: 13418.041621
+Step    0 | Loss: 13417.684951
+Step   50 | Loss: 11881.887964
+Step  100 | Loss: 10484.839559
+Step  150 | Loss: 9264.162801
+Step  200 | Loss: 8191.531959
+Step  250 | Loss: 7352.096923
+Step  300 | Loss: 6699.080500
+Step  350 | Loss: 6132.575986
+Step  400 | Loss: 5833.099439
+Step  450 | Loss: 5387.666287
+Step  499 | Loss: 5066.239737
+Step    0 | Loss: 13336.757393
+Step   19 | Loss: 13331.074604
+Step    0 | Loss: 13330.675428
+Step   50 | Loss: 11658.606808
+Step  100 | Loss: 10234.650221
+Step  150 | Loss: 8985.059032
+Step  200 | Loss: 8071.995794
+Step  250 | Loss: 7255.812518
+Step  300 | Loss: 6669.876119
+Step  350 | Loss: 6073.884548
+Step  400 | Loss: 5708.370760
+Step  450 | Loss: 5415.208962
+Step  499 | Loss: 5233.913292
+Step    0 | Loss: 13313.160988
+Step   19 | Loss: 13308.170354
+Step    0 | Loss: 13307.863742
+Step   50 | Loss: 11822.302803
+Step  100 | Loss: 10406.863494
+Step  150 | Loss: 9223.778387
+Step  200 | Loss: 8205.920358
+Step  250 | Loss: 7382.998710
+Step  300 | Loss: 6722.377453
+Step  350 | Loss: 6168.184874
+Step  400 | Loss: 5609.279516
+Step  450 | Loss: 5362.167250
+Step  499 | Loss: 5034.039750
+Step    0 | Loss: 13376.063278
+Step   19 | Loss: 13370.737627
+Step    0 | Loss: 13370.351709
+Step   50 | Loss: 11839.864093
+Step  100 | Loss: 10496.629994
+Step  150 | Loss: 9337.787020
+Step  200 | Loss: 8338.270608
+Step  250 | Loss: 7609.075045
+Step  300 | Loss: 6930.927879
+Step  350 | Loss: 6392.303806
+Step  400 | Loss: 5996.544284
+Step  450 | Loss: 5534.136993
+Step  499 | Loss: 5255.490745
+Step    0 | Loss: 13360.333648
+Step   19 | Loss: 13354.864241
+Step    0 | Loss: 13354.568656
+Step   50 | Loss: 11693.618086
+Step  100 | Loss: 10205.719291
+Step  150 | Loss: 9041.963366
+Step  200 | Loss: 8000.356521
+Step  250 | Loss: 7183.354005
+Step  300 | Loss: 6587.924335
+Step  350 | Loss: 6081.418122
+Step  400 | Loss: 5580.311262
+Step  450 | Loss: 5322.598610
+Step  499 | Loss: 5095.224246
+Step    0 | Loss: 453.471082
+Step   50 | Loss: 353.484659
+Step  100 | Loss: 256.135715
+Step  150 | Loss: 187.411098
+Step  200 | Loss: 142.006936
+Step  250 | Loss: 112.260021
+Step  300 | Loss: 92.449285
+Step  350 | Loss: 79.463810
+Step  400 | Loss: 71.319577
+Step  450 | Loss: 66.271929
+Step  499 | Loss: 63.263990
+Step    0 | Loss: 452.152557
+Step   50 | Loss: 334.064377
+Step  100 | Loss: 214.744889
+Step  150 | Loss: 135.361070
+Step  200 | Loss: 85.665956
+Step  250 | Loss: 56.037745
+Step  300 | Loss: 40.296839
+Step  350 | Loss: 32.602775
+Step  400 | Loss: 28.750884
+Step  450 | Loss: 26.589202
+Step  499 | Loss: 25.309241
+Step    0 | Loss: 451.456764
+Step   50 | Loss: 367.464959
+Step  100 | Loss: 275.473366
+Step  150 | Loss: 195.395071
+Step  200 | Loss: 144.196906
+Step  250 | Loss: 116.069791
+Step  300 | Loss: 101.116075
+Step  350 | Loss: 93.229443
+Step  400 | Loss: 88.771349
+Step  450 | Loss: 85.838907
+Step  499 | Loss: 83.624254
+Step    0 | Loss: 452.363501
+Step   50 | Loss: 345.713979
+Step  100 | Loss: 237.910932
+Step  150 | Loss: 163.557637
+Step  200 | Loss: 118.403201
+Step  250 | Loss: 93.124858
+Step  300 | Loss: 78.709278
+Step  350 | Loss: 69.932102
+Step  400 | Loss: 64.057305
+Step  450 | Loss: 59.722668
+Step  499 | Loss: 56.309149
+Step    0 | Loss: 452.545294
+Step   50 | Loss: 344.810594
+Step  100 | Loss: 241.711739
+Step  150 | Loss: 167.091820
+Step  200 | Loss: 116.966874

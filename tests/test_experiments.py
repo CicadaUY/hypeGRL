@@ -2,6 +2,7 @@
 import networkx as nx
 import pytest
 
+from experiments.datasets import balanced_tree_graph, single_cell_graph
 from experiments.graph_stats import mean_hyperbolicity
 
 
@@ -28,3 +29,34 @@ def test_runs_and_is_bounded_on_karate():
     delta = mean_hyperbolicity(G, n_samples=5000, seed=0)
     # Small, dense, low-diameter graph: non-negative and well below the diameter.
     assert 0.0 <= delta < nx.diameter(G)
+
+
+# ----------------------------------------------------------------------
+# Dataset loaders
+# ----------------------------------------------------------------------
+
+
+def test_balanced_tree_default_shape():
+    G = balanced_tree_graph(2, 4)
+    assert G.number_of_nodes() == 31 and G.number_of_edges() == 30
+
+
+# Paper Table I: (nodes, edges, diameter) for the single-cell k-NN graphs.
+@pytest.mark.parametrize(
+    "name, n, m, diam",
+    [
+        ("ToggleSwitch", 200, 1896, 16),
+        ("Olsson", 382, 4214, 8),
+        ("MyeloidProgenitors", 640, 5649, 38),
+    ],
+)
+def test_single_cell_graph_matches_paper(name, n, m, diam):
+    G = single_cell_graph(name)
+    assert G.number_of_nodes() == n
+    assert G.number_of_edges() == m
+    assert nx.is_connected(G)
+    assert nx.diameter(G) == diam
+    # Edges carry the k-NN distance as weight; all nodes have a cell-type label.
+    u, v, data = next(iter(G.edges(data=True)))
+    assert data["weight"] > 0
+    assert all("label" in d for _, d in G.nodes(data=True))

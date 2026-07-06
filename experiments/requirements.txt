@@ -1,0 +1,6 @@
+# Dependencies for the paper reproduction scripts (experiments/), on top of
+# the installed hypegrl library. These are intentionally kept out of the
+# library's own dependencies.
+pandas>=2.0            # single-cell CSV loading
+torch-geometric>=2.4   # PolBlogs dataset (Table II)
+graspologic>=3.4       # RDPG / adjacency spectral embedding baseline (Table I)
