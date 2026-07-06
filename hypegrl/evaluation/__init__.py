@@ -5,6 +5,10 @@ edge-removal link-prediction splits, ranking metrics, distance-based
 classification, and graph geometry statistics. Paper-specific dataset loaders
 and baselines live outside the library (in ``experiments/``).
 """
+from hypegrl.evaluation.classification import (
+    hyperbolic_knn_classification,
+    pairwise_distance_matrix,
+)
 from hypegrl.evaluation.link_prediction import (
     LinkPredictionSplit,
     candidate_scores,
@@ -27,4 +31,6 @@ __all__ = [
     "f1_at_k",
     "lift_curve",
     "precision_recall_f1_at_k",
+    "hyperbolic_knn_classification",
+    "pairwise_distance_matrix",
 ]

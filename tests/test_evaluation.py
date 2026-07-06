@@ -7,8 +7,10 @@ from hypegrl.evaluation import (
     LinkPredictionSplit,
     candidate_scores,
     f1_at_k,
+    hyperbolic_knn_classification,
     lift_curve,
     link_prediction_split,
+    pairwise_distance_matrix,
     precision_recall_f1_at_k,
     training_graph,
 )
@@ -138,3 +140,41 @@ def test_candidate_scores_maps_pairs_through_node_order():
     # ("a","c") -> rows 1,2 -> M[1,2]=12 ; ("a","b") -> rows 1,0 -> M[1,0]=10.
     assert list(scores) == [12.0, 10.0]
     assert list(is_pos) == [True, False]
+
+
+# ----------------------------------------------------------------------
+# Distance-based KNN classification
+# ----------------------------------------------------------------------
+
+
+def _two_poincare_clusters(seed=0, per_class=40):
+    """Two well-separated clusters in the Poincaré disk, opposite directions."""
+    rng = np.random.default_rng(seed)
+    a = np.array([0.5, 0.0]) + 0.03 * rng.standard_normal((per_class, 2))
+    b = np.array([-0.5, 0.0]) + 0.03 * rng.standard_normal((per_class, 2))
+    X = np.vstack([a, b])
+    y = np.array([0] * per_class + [1] * per_class)
+    return X, y
+
+
+def test_pairwise_distance_matrix_is_symmetric_zero_diag():
+    X, _ = _two_poincare_clusters()
+    D = pairwise_distance_matrix(X)
+    assert D.shape == (len(X), len(X))
+    assert np.allclose(D, D.T)
+    assert np.allclose(np.diag(D), 0.0, atol=1e-9)
+
+
+def test_knn_separates_well_separated_clusters():
+    X, y = _two_poincare_clusters()
+    res = hyperbolic_knn_classification(X, y, k=5, seed=0)
+    assert res["accuracy"] == 1.0 and res["f1"] == 1.0
+    assert res["n_classes"] == 2
+    assert res["n_test"] == int(round(0.2 * len(y)))
+
+
+def test_knn_is_deterministic_under_seed():
+    X, y = _two_poincare_clusters()
+    a = hyperbolic_knn_classification(X, y, k=3, seed=7)
+    b = hyperbolic_knn_classification(X, y, k=3, seed=7)
+    assert a == b
