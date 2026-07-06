@@ -31,6 +31,7 @@ hypeGRL
    :maxdepth: 2
    :caption: Tutorials
 
+   tutorials/evaluation
    tutorials/unknown_edges
    tutorials/streaming
    tutorials/graph_generation
