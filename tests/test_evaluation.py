@@ -1,10 +1,15 @@
 """Tests for the evaluation utilities."""
 import networkx as nx
+import numpy as np
 import pytest
 
 from hypegrl.evaluation import (
     LinkPredictionSplit,
+    candidate_scores,
+    f1_at_k,
+    lift_curve,
     link_prediction_split,
+    precision_recall_f1_at_k,
     training_graph,
 )
 
@@ -74,3 +79,62 @@ def test_training_graph_keeps_all_nodes_and_weights():
     assert H.number_of_edges() == 1 and H.has_edge("a", "b")
     # Weight copied from the original graph.
     assert H["a"]["b"]["weight"] == 2.5
+
+
+# ----------------------------------------------------------------------
+# Ranking metrics
+# ----------------------------------------------------------------------
+
+# 10 candidates, 2 positives sitting at the two highest scores.
+_SCORES = np.array([0.9, 0.8, 0.1, 0.2, 0.3, 0.05, 0.7, 0.4, 0.6, 0.15])
+_POS_TOP = np.zeros(10, dtype=bool)
+_POS_TOP[[0, 1]] = True
+
+
+def test_f1_perfect_when_positives_rank_first():
+    m = precision_recall_f1_at_k(_SCORES, _POS_TOP, higher_is_link=True)
+    # k defaults to n_positives (=2); both predicted, all metrics = 1.
+    assert m["k"] == 2 and m["tp"] == 2
+    assert m["precision"] == m["recall"] == m["f1"] == 1.0
+
+
+def test_f1_half_when_one_positive_is_low_ranked():
+    is_pos = np.zeros(10, dtype=bool)
+    is_pos[[0, 5]] = True  # 0.9 (top) and 0.05 (bottom)
+    m = precision_recall_f1_at_k(_SCORES, is_pos, higher_is_link=True)
+    # Predict top 2 -> catches only the high-scored positive.
+    assert m["tp"] == 1
+    assert m["precision"] == 0.5 and m["recall"] == 0.5 and m["f1"] == 0.5
+
+
+def test_direction_flag_flips_ranking():
+    # As distances (smaller = link), the two smallest are 0.05 and 0.1.
+    is_pos = np.zeros(10, dtype=bool)
+    is_pos[[5, 2]] = True  # 0.05 and 0.1
+    assert f1_at_k(_SCORES, is_pos, higher_is_link=False) == 1.0
+    # Under the probability convention those same two rank last -> miss both.
+    assert f1_at_k(_SCORES, is_pos, higher_is_link=True) == 0.0
+
+
+def test_lift_curve_first_bin_capture():
+    curve = lift_curve(_SCORES, _POS_TOP, n_bins=2, higher_is_link=True)
+    assert curve.bin_counts == [5, 5]
+    # Both positives are top-ranked -> both fall in the first bin.
+    assert curve.captured_in_first_bin == (2, 2)
+    # First-bin lift is (2/5) / (2/10) = 2.0; second bin has none.
+    assert curve.lift[0] == pytest.approx(2.0)
+    assert curve.lift[1] == pytest.approx(0.0)
+
+
+def test_candidate_scores_maps_pairs_through_node_order():
+    # Split over labelled nodes; positives are the omega_R prefix.
+    split = LinkPredictionSplit(
+        omega_E=[], omega_R=[("a", "c")], omega_N=[("a", "b")]
+    )
+    # Rows are ordered [b, a, c]; encode each entry as 10*row + col for checking.
+    nodes = ["b", "a", "c"]
+    M = np.array([[10 * i + j for j in range(3)] for i in range(3)], dtype=float)
+    scores, is_pos = candidate_scores(split, M, nodes=nodes)
+    # ("a","c") -> rows 1,2 -> M[1,2]=12 ; ("a","b") -> rows 1,0 -> M[1,0]=10.
+    assert list(scores) == [12.0, 10.0]
+    assert list(is_pos) == [True, False]

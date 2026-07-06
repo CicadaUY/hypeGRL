@@ -96,6 +96,48 @@ def link_prediction_split(
     return LinkPredictionSplit(omega_E=omega_E, omega_R=omega_R, omega_N=omega_N)
 
 
+def candidate_scores(
+    split: LinkPredictionSplit,
+    score_matrix: np.ndarray,
+    nodes: Optional[list] = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Read a decoder matrix into candidate-level ranking arrays.
+
+    Pulls one score per candidate pair out of an ``(N, N)`` decoder output
+    (a distance or probability matrix) and marks which candidates are held-out
+    positives, ready for :mod:`hypegrl.evaluation.ranking`.
+
+    Parameters
+    ----------
+    split:
+        The split whose ``candidates`` (``omega_R`` then ``omega_N``) are scored.
+    score_matrix:
+        ``(N, N)`` decoder output; ``score_matrix[i, j]`` scores the pair of
+        nodes at rows ``i`` and ``j``.
+    nodes:
+        Node label for each row of ``score_matrix`` (use ``embedder.nodes()``).
+        ``None`` assumes the labels index the matrix directly (integer labels
+        ``0..N-1``).
+
+    Returns
+    -------
+    (scores, is_positive):
+        Arrays over ``split.candidates``; ``is_positive`` is ``True`` for the
+        ``omega_R`` prefix.
+    """
+    candidates = split.candidates
+    if nodes is None:
+        scores = np.array([score_matrix[u, v] for u, v in candidates], dtype=float)
+    else:
+        pos = {node: i for i, node in enumerate(nodes)}
+        scores = np.array(
+            [score_matrix[pos[u], pos[v]] for u, v in candidates], dtype=float
+        )
+    is_positive = np.zeros(len(candidates), dtype=bool)
+    is_positive[: len(split.omega_R)] = True
+    return scores, is_positive
+
+
 def training_graph(G: nx.Graph, split: LinkPredictionSplit) -> nx.Graph:
     """Build the observed graph ``(V, omega_E)`` for an edge-removal split.
 

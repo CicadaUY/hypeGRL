@@ -45,6 +45,9 @@ dependencies = [
     "numpy>=1.24",
     "scipy>=1.10",
     "matplotlib>=3.7",
+    # hypegrl.evaluation: ranking metrics (precision/recall/F1) and the
+    # distance-based KNN classifier are delegated to scikit-learn.
+    "scikit-learn>=1.3",
 ]
 
 [project.optional-dependencies]
