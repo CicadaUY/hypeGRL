@@ -11,3 +11,6 @@ dist/
 
 # Sphinx build output
 docs/_build/
+
+# Experiments output
+experiments/results/

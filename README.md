@@ -22,12 +22,12 @@ representations are insensitive to the unobserved edges.
 |---|---|---|---|---|---|---|
 | Poincaré Maps | Poincaré disk | Yes | No | Yes | warm-start refit | ✅ |
 | Poincaré Embeddings | Poincaré ball | Yes | FD loss only | Yes | warm-start refit | ✅ |
+| Lorentz Embeddings | Hyperboloid | Yes | No | Yes | warm-start refit | ✅ |
 | HyperMap | Poincaré ball | Yes | Yes | Yes | warm-start refit | ✅ |
 | Hydra | Poincaré disk | No (closed-form) | No | No (zero-impute) | refit | ✅ |
 | Hydra+ | Poincaré disk | Yes | No | No (zero-impute) | refit | ✅ |
-| d-Mercator | S^D + Poincaré ball | Yes | Yes | Planned | refit | ✅ |
+| D-Mercator | S^D + Poincaré ball | Yes | Yes | Planned | refit | ✅ |
 | ASE / RDPG | Euclidean | Yes | Yes | — | — | Planned |
-| Lorentz | Hyperboloid | Yes | Yes | — | — | Planned |
 
 *Updates*: methods currently re-fit on graph changes (warm-started where
 gradient-based). True incremental updates — Woodbury forest-matrix updates and
@@ -81,6 +81,38 @@ embedder.fit(G)
 X = embedder.embeddings()
 print(X.shape)  # (34, 2)
 ```
+
+## Evaluation
+
+`hypegrl.evaluation` provides dataset-agnostic tools for benchmarking any
+embedder under a common protocol — link prediction and distance-based node
+classification — reusing scikit-learn for the underlying metrics.
+
+```python
+from hypegrl.evaluation import (
+    link_prediction_split, training_graph,
+    pairwise_distance_matrix, candidate_scores, f1_at_k,
+)
+
+# Hide 10% of edges, embed the remaining graph, rank the held-out edges.
+split = link_prediction_split(G, q=0.9, seed=0)
+emb = PoincareMapsEmbedder(d=2).fit(training_graph(G, split))
+D = pairwise_distance_matrix(emb.embeddings())               # geodesic distances
+scores, is_positive = candidate_scores(split, D, nodes=emb.nodes())
+print(f1_at_k(scores, is_positive, higher_is_link=False))    # rank by distance
+```
+
+Node classification with a hyperbolic-distance KNN:
+
+```python
+from hypegrl.evaluation import hyperbolic_knn_classification
+
+result = hyperbolic_knn_classification(emb.embeddings(), labels, k=5, seed=0)
+print(result["accuracy"], result["f1"])
+```
+
+The scripts under `experiments/` reproduce the paper's benchmark tables on top
+of these utilities.
 
 ## Documentation
 
