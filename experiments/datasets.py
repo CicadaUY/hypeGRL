@@ -20,6 +20,7 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 from scipy.sparse import csgraph
+from sklearn.decomposition import PCA
 from sklearn.metrics import pairwise_distances
 from sklearn.neighbors import kneighbors_graph
 
@@ -28,6 +29,17 @@ SINGLE_CELL_DIR = Path(__file__).resolve().parent / "data" / "single_cell"
 
 # Column names that hold cell-type labels rather than expression features.
 _LABEL_COLUMNS = ("labels", "cell_type")
+
+# Official Poincaré-Maps per-dataset settings, transcribed from that repo's
+# README replication commands (github.com/facebookresearch/PoincareMaps). ``k``
+# and ``n_pca`` shape the shared k-NN graph; ``sigma``/``gamma`` are Poincaré
+# Maps' own kernel/decoder bandwidths (used by that method, not the graph). The
+# v1 paper instead used a uniform k=15, n_pca=0 recipe for all datasets.
+OFFICIAL_SETTINGS = {
+    "ToggleSwitch":       {"k": 15, "n_pca": 0,  "sigma": 1.0, "gamma": 2.0},
+    "Olsson":             {"k": 15, "n_pca": 20, "sigma": 1.0, "gamma": 2.0},
+    "MyeloidProgenitors": {"k": 30, "n_pca": 0,  "sigma": 2.0, "gamma": 2.0},
+}
 
 
 def balanced_tree_graph(branching: int = 2, depth: int = 4) -> nx.Graph:
@@ -68,6 +80,8 @@ def single_cell_graph(
     k: int = 15,
     metric: str = "minkowski",
     symmetric: bool = True,
+    n_pca: int = 0,
+    normalize: bool = False,
     datasets_dir: Optional[os.PathLike] = None,
 ) -> nx.Graph:
     """Symmetric k-NN graph over a single-cell expression dataset.
@@ -88,6 +102,13 @@ def single_cell_graph(
     symmetric:
         ``True`` symmetrises by the larger directed weight (``max``); ``False``
         by the smaller (``min``).
+    n_pca:
+        If non-zero, reduce features to this many principal components before the
+        k-NN (the official Poincaré-Maps preprocessing; e.g. 20 for Olsson).
+        ``0`` (default) keeps the raw features.
+    normalize:
+        If ``True``, mean-variance normalise each feature before the k-NN (the
+        official preprocessing for low-dimensional datasets).
     datasets_dir:
         Directory holding the CSVs (defaults to the vendored :data:`SINGLE_CELL_DIR`).
 
@@ -103,6 +124,17 @@ def single_cell_graph(
     labels = df[label_col].astype(str).to_numpy() if label_col is not None else None
     feature_df = df.drop(columns=[label_col]) if label_col is not None else df
     features = feature_df.select_dtypes(include="number").to_numpy(dtype=float)
+
+    # Preprocessing (mirrors the official ``prepare_data``): optional
+    # mean-variance normalisation, then optional PCA. ``random_state`` is set for
+    # reproducibility (the official code leaves PCA's randomized solver unseeded).
+    if normalize:
+        std = features.std(axis=0)
+        std[std == 0] = 1.0
+        features = (features - features.mean(axis=0)) / std
+    if n_pca:
+        nc = min(n_pca, features.shape[1])
+        features = PCA(n_components=nc, random_state=0).fit_transform(features)
 
     K = kneighbors_graph(
         features, k, mode="distance", metric=metric, include_self=False

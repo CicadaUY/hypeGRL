@@ -45,11 +45,18 @@ HYPERBOLIC_METHODS: dict[str, EmbedderFactory] = {
     # the paper's D-dimensional generalisation and underperforms here.
     "D-Mercator": lambda s: DMercatorEmbedder(d=2, d1_init="mercator", random_state=s),
     "Poincare Embeddings": lambda s: PoincareEmbeddingsEmbedder(d=2, random_state=s),
-    "Poincare Maps": lambda s: PoincareMapsEmbedder(d=2, random_state=s),
+    # n_steps=5000: the default 500 undertrains at N~640 (Myeloid F1 500->8.8,
+    # 2000->38.5, 5000->49.4). ToggleSwitch/Olsson converge well before 500 and are
+    # flat past it, so a single higher budget fixes Myeloid without changing them.
+    "Poincare Maps": lambda s: PoincareMapsEmbedder(d=2, n_steps=5000, random_state=s),
     # Available but excluded from the paper's core comparison:
     "Hydra": lambda s: HydraEmbedder(dim=2, curvature=None),
     # HyperMap's greedy init is deterministic (degree-sorted), so no seed.
-    "HyperMap": lambda s: HyperMapEmbedder(d=2, verbose_init=False),
+    # n_steps=0 = init-only (the faithful original HyperMap). Our Fermi-Dirac
+    # gradient refinement degrades distance-ranked link prediction here — mildly
+    # on ToggleSwitch (32.5 refined vs 40.8 init) and severely on Myeloid (37.0 vs
+    # 68.3) — so the reported number is the original method without the extra stage.
+    "HyperMap": lambda s: HyperMapEmbedder(d=2, n_steps=0, verbose_init=False),
     "Lorentz Embeddings": lambda s: LorentzEmbeddingsEmbedder(d=2, random_state=s),
 }
 
@@ -163,13 +170,19 @@ def run_table_i(
     seeds: list[int] = (0, 1, 2, 3, 4),
     q: float = 0.9,
 ) -> list[dict]:
-    """Run the full link-prediction table; returns one result row per model/dataset."""
-    from experiments.datasets import single_cell_graph
+    """Run the full link-prediction table; returns one result row per model/dataset.
+
+    Each graph is built with its official Poincaré-Maps per-dataset settings
+    (:data:`~experiments.datasets.OFFICIAL_SETTINGS`): k and PCA. The v1 paper
+    used a uniform k=15, no-PCA recipe (kept as ``table_i_uniform_k15.md``).
+    """
+    from experiments.datasets import OFFICIAL_SETTINGS, single_cell_graph
 
     seeds = list(seeds)
     rows = []
     for name in datasets:
-        G = single_cell_graph(name)
+        cfg = OFFICIAL_SETTINGS[name]
+        G = single_cell_graph(name, k=cfg["k"], n_pca=cfg["n_pca"])
         for n in rdpg_dims:
             row = evaluate(G, "RDPG", seeds, q=q, rdpg_dim=n)
             rows.append({"dataset": name, **row})
