@@ -11,8 +11,14 @@ Datasets:
   Olsson, Myeloid Progenitors), built as a symmetric k-NN graph over the
   single-cell expression profiles (the Poincaré Maps construction).
 - ``polblogs_graph`` — the Table II political-blogs network (largest component).
+- ``airports_graph`` — struc2vec air-traffic networks (USA/Brazil/Europe): heavy-tailed,
+  unweighted, anonymized, with an activity-class label.
+- ``openflights_graph`` — the OpenFlights world airport route network (D-Mercator's own
+  benchmark): heavy-tailed, with IATA / name / country / lat / lon node attributes.
 """
+import csv
 import os
+import urllib.request
 from pathlib import Path
 from typing import Optional
 
@@ -181,6 +187,124 @@ def polblogs_graph(root: Optional[os.PathLike] = None) -> tuple[nx.Graph, np.nda
     G = nx.Graph()
     G.add_nodes_from(range(data.num_nodes))
     G.add_edges_from(edge_index.T.tolist())
+
+    kept = sorted(max(nx.connected_components(G), key=len))
+    old_to_new = {old: new for new, old in enumerate(kept)}
+    G = nx.relabel_nodes(G.subgraph(kept).copy(), old_to_new)
+    y = y_all[kept]
+    return G, y
+
+
+# OpenFlights raw data (jpatokal/openflights); downloaded on first use and cached.
+_OPENFLIGHTS_URLS = {
+    "routes.dat": "https://raw.githubusercontent.com/jpatokal/openflights/master/data/routes.dat",
+    "airports.dat": "https://raw.githubusercontent.com/jpatokal/openflights/master/data/airports.dat",
+}
+
+
+def openflights_graph(root: Optional[os.PathLike] = None) -> nx.Graph:
+    """The OpenFlights world airport route network (largest connected component).
+
+    Nodes are airports, edges are commercial routes (undirected, unweighted). This
+    is the airport network used by the D-Mercator paper (Jankowski et al., 2023,
+    Table I). The raw ``routes.dat`` and ``airports.dat`` are downloaded from the
+    OpenFlights repository on first use and cached under ``root``; the graph is the
+    largest connected component with nodes relabelled ``0..N-1``.
+
+    Each node carries the airport metadata as attributes: ``iata`` (3-letter code),
+    ``name``, ``country``, ``lat``, ``lon``. So the busiest hubs are nameable, e.g.::
+
+        G = openflights_graph()
+        hubs = sorted(G, key=G.degree, reverse=True)[:5]
+        [G.nodes[n]["iata"] for n in hubs]          # ['AMS', 'FRA', 'CDG', ...]
+
+    Unlike ``airports_graph`` (anonymized regional struc2vec data), this is the full
+    global network with identities. Heavy-tailed with high clustering — the S^1/H^2
+    regime for HyperMap / D-Mercator; the paper embeds it in ``d=2`` (dimension D=1).
+
+    Parameters
+    ----------
+    root:
+        Download/cache directory (default ``./data/openflights``).
+
+    Returns
+    -------
+    nx.Graph
+        The airport network with ``iata``/``name``/``country``/``lat``/``lon`` node
+        attributes.
+
+    Notes
+    -----
+    OpenFlights tracks a live data file, so the exact ``N`` depends on the snapshot
+    downloaded (~3300 airports at the time of writing). Once cached, subsequent calls
+    are stable; delete the cache to refresh.
+    """
+    directory = Path(root) if root is not None else Path("./data/openflights")
+    directory.mkdir(parents=True, exist_ok=True)
+    for fname, url in _OPENFLIGHTS_URLS.items():
+        fpath = directory / fname
+        if not fpath.exists():
+            urllib.request.urlretrieve(url, fpath)
+
+    # airport id -> (iata, name, country, lat, lon)
+    meta: dict[str, tuple] = {}
+    with open(directory / "airports.dat", encoding="utf-8") as f:
+        for row in csv.reader(f):
+            if len(row) >= 8:
+                try:
+                    lat, lon = float(row[6]), float(row[7])
+                except ValueError:
+                    lat, lon = float("nan"), float("nan")
+                meta[row[0]] = (row[4], row[1], row[3], lat, lon)
+
+    # edges from routes.dat by source/destination airport ID (cols 3 and 5)
+    H = nx.Graph()
+    with open(directory / "routes.dat", encoding="utf-8") as f:
+        for row in csv.reader(f):
+            if len(row) < 6:
+                continue
+            src, dst = row[3], row[5]        # source / destination airport IDs
+            if src != "\\N" and dst != "\\N" and src != dst:
+                H.add_edge(src, dst)
+
+    H = H.subgraph(max(nx.connected_components(H), key=len)).copy()
+    order = sorted(H.nodes())
+    G = nx.relabel_nodes(H, {aid: i for i, aid in enumerate(order)})
+    for i, aid in enumerate(order):
+        iata, name, country, lat, lon = meta.get(
+            aid, ("", "", "", float("nan"), float("nan")))
+        G.nodes[i].update(iata=iata, name=name, country=country, lat=lat, lon=lon)
+    return G
+
+
+def airports_graph(
+    name: str = "USA",
+    root: Optional[os.PathLike] = None,
+) -> tuple[nx.Graph, np.ndarray]:
+    """Air-traffic network (Ribeiro et al., 2017), largest connected component.
+
+    Nodes are airports, edges commercial flights; ``name`` selects the region
+    (``"USA"``, ``"Brazil"``, ``"Europe"``). Node labels ``y`` are the activity
+    classes (quartiles of passenger flow). Loaded via PyTorch Geometric;
+    self-loops removed, largest component kept, nodes relabelled ``0..N-1``.
+
+    Unlike the single-cell k-NN graphs, these are *observed* networks with a
+    genuine heavy-tailed degree distribution and high clustering — the regime the
+    S^1/H^2 methods (HyperMap, D-Mercator) are designed for. Their edges are also
+    real (not k-NN constructed), so link prediction needs no weighting choice.
+    """
+    from torch_geometric.datasets import Airports
+
+    data = Airports(
+        root=str(root) if root is not None else f"./data/airports_{name.lower()}",
+        name=name,
+    )[0]
+    y_all = data.y.numpy()
+
+    G = nx.Graph()
+    G.add_nodes_from(range(data.num_nodes))
+    G.add_edges_from(data.edge_index.numpy().T.tolist())
+    G.remove_edges_from(nx.selfloop_edges(G))
 
     kept = sorted(max(nx.connected_components(G), key=len))
     old_to_new = {old: new for new, old in enumerate(kept)}

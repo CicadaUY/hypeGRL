@@ -14,3 +14,7 @@ docs/_build/
 
 # Experiments output
 experiments/results/
+
+# Downloaded dataset caches (OpenFlights, torch_geometric Airports, etc.);
+# vendored data lives under experiments/data/ and is tracked separately.
+/data/
