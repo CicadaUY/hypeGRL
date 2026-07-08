@@ -111,8 +111,9 @@ result = hyperbolic_knn_classification(emb.embeddings(), labels, k=5, seed=0)
 print(result["accuracy"], result["f1"])
 ```
 
-The scripts under `experiments/` reproduce the paper's benchmark tables on top
-of these utilities.
+The scripts under `experiments/` reproduce our benchmark tables on top of these
+utilities. They also serve as a worked, advanced-usage example of the library
+beyond the tutorials — see [`experiments/README.md`](experiments/README.md).
 
 ## Documentation
 
