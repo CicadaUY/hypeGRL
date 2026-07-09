@@ -66,6 +66,20 @@ from hypegrl.embedders._dmercator_init import dmercator_init
 from hypegrl.embedders.base import HyperbolicEmbedder
 from hypegrl.inference.riemannian_optimizer import riemannian_optimize
 from hypegrl.manifolds.poincare import POINCARE_BALL
+from hypegrl.representations import (
+    BallRepresentation,
+    HyperboloidRepresentation,
+    PolarRepresentation,
+)
+
+# Chart in which the Fermi-Dirac refinement runs. Polar is the default because
+# it preserves the radial coordinate at the large radii D-Mercator assigns to
+# leaves (the ball saturates at r≈12, the hyperboloid distance fails at r≈18).
+_REPRESENTATIONS = {
+    "polar": PolarRepresentation,
+    "ball": BallRepresentation,
+    "hyperboloid": HyperboloidRepresentation,
+}
 
 # ---------------------------------------------------------------------------
 # Fermi-Dirac NLL on hyperbolic distances
@@ -170,11 +184,16 @@ class DMercatorEmbedder(HyperbolicEmbedder):
         device: str = "cpu",
         random_state: Optional[int] = None,
         d1_init: str = "le",
+        representation: str = "polar",
     ):
         if d < 2:
             raise ValueError("d must be >= 2 (sphere dimension D = d-1 >= 1).")
         if d1_init not in ("le", "mercator"):
             raise ValueError(f"d1_init must be 'le' or 'mercator'; got {d1_init!r}.")
+        if representation not in _REPRESENTATIONS:
+            raise ValueError(
+                f"representation must be one of {sorted(_REPRESENTATIONS)}; "
+                f"got {representation!r}.")
         self.d = d
         self.beta = beta
         self.lr = lr
@@ -184,6 +203,7 @@ class DMercatorEmbedder(HyperbolicEmbedder):
         self.device = device
         self.random_state = random_state
         self.d1_init = d1_init
+        self.representation = representation
 
         # Fitted state
         self._X: Optional[np.ndarray] = None           # (N, d) Poincaré ball
@@ -257,66 +277,63 @@ class DMercatorEmbedder(HyperbolicEmbedder):
             self._R_hat = res["R_hat"]
             self._kappa_min = float(np.min(res["kappa"]))
             self._nodes = res["nodes"]
-            # Native (S^D × ℝ₊) coordinates, stored directly from the init —
-            # NOT read back from the Poincaré-ball embedding, whose radius
-            # saturates at r≈12.2 (tanh(r/2)→1) for the large radii leaves reach.
-            # These are the authoritative geometry; see native_coordinates().
-            r0 = res["r"]
-            V0 = res["V"]
-            self._r = r0
-            self._V = V0
-            self._kappa = res["kappa"]
-            # warm-start Poincaré ball point: x = tanh(r/2) · v
-            # (the stereographic image of the hyperboloid point (cosh r, sinh r·v))
-            X_warm = np.tanh(r0 / 2.0)[:, None] * V0
-        else:
-            X_warm = self._X  # placeholder; overwritten below when X_init given
+            # Native (S^D × ℝ₊) warm-start coordinates from the init. These seed
+            # the representation built below; the authoritative self._r/_V/_kappa
+            # are read back from the (possibly refined) representation afterwards.
+            self._r = res["r"]
+            self._V = res["V"]
+        # (cached refit when not need_init: self._r / self._V persist.)
 
         nodes = self._nodes
         self._G = G
 
-        # ── External warm start (Poincaré ball) overrides the init's ───────
-        if X_init is not None:
-            X_warm = np.asarray(X_init, dtype=np.float64)
-
         beta = self._beta_fitted
         R_hat = self._R_hat
         half_beta = beta / 2.0
-
-        # ── Structural similarity (binary adjacency) ───────────────────────
         A = nx.to_numpy_array(G, nodelist=nodes, weight=None)
 
-        # ── Refinement: Riemannian Adam on the Poincaré ball ───────────────
+        # ── Build the representation (chosen chart) from the warm start ────
+        # The native polar coords (self._r, self._V) are the natural warm start;
+        # an external X_init (Poincaré-ball coordinates) overrides them via the
+        # exact ball→polar map inside the representation.
+        rep_cls = _REPRESENTATIONS[self.representation]
+        if X_init is not None:
+            rep = rep_cls.from_ball(
+                np.asarray(X_init, dtype=np.float64), device=self.device)
+        else:
+            rep = rep_cls.from_polar(self._r, self._V, device=self.device)
+
+        # ── Refinement: Riemannian Adam in the chosen chart ────────────────
+        # The decoder pulls the pairwise distance from the representation, so the
+        # loss is chart-agnostic (same geometry in polar / ball / hyperboloid).
         if self.n_steps == 0:
-            X_opt = POINCARE_BALL.projx(
-                torch.as_tensor(X_warm, dtype=torch.float64)).numpy()
             self._loss_history = []
         else:
-            def loss_fn(X: torch.Tensor, A_t: torch.Tensor) -> torch.Tensor:
-                return _fermi_dirac_nll_poincare(X, A_t, half_beta, R_hat)
+            def loss_fn(rep_, A_t: torch.Tensor) -> torch.Tensor:
+                return _fermi_dirac_nll(rep_.dist(), A_t, half_beta, R_hat)
 
             result = riemannian_optimize(
-                X_init=POINCARE_BALL.projx(
-                    torch.as_tensor(X_warm, dtype=torch.float64)).numpy(),
+                representation=rep,
                 s_A=A,
                 loss_fn=loss_fn,
-                manifold=POINCARE_BALL,
                 lr=self.lr,
                 n_steps=self.n_steps,
                 grad_clip=self.grad_clip,
                 log_every=self.log_every,
                 device=self.device,
             )
-            X_opt = result["X"]
             self._loss_history = result["loss_history"]
 
-        self._X = X_opt
-
-        # Native (r, V, κ) were stored directly from the init above. The ball
-        # embedding self._X is a lossy projection at large radius, so it is NOT
-        # inverted back into r/κ — that round-trip through the saturating
-        # tanh(r/2) is exactly what collapsed the radial coordinate.
-        # See native_coordinates().
+        # ── Read the refined embedding back in the charts the API needs ────
+        # Native (authoritative) geometry from the representation; the ball image
+        # is a (possibly saturating) projection for embeddings()/plotting. With
+        # representation="polar" the radius is preserved at large r; with "ball"
+        # it saturates — honestly reflecting what that chart can hold.
+        r_ref, V_ref = rep.to_polar()
+        self._r = r_ref.detach().cpu().numpy()
+        self._V = V_ref.detach().cpu().numpy()
+        self._kappa = self._kappa_min * np.exp((D / 2.0) * (R_hat - self._r))
+        self._X = rep.to_ball().detach().cpu().numpy()
 
         return self
 

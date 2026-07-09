@@ -25,96 +25,105 @@ import torch
 
 
 def riemannian_optimize(
-    X_init: np.ndarray,
-    s_A: np.ndarray,
-    loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
-    manifold: geoopt.Manifold,
+    X_init: np.ndarray = None,
+    s_A: np.ndarray = None,
+    loss_fn: Callable = None,
+    manifold: geoopt.Manifold = None,
     lr: float = 1e-2,
     n_steps: int = 500,
     grad_clip: float = 10.0,
     log_every: int = 50,
     stabilize: int = 10,
     device: str = "cpu",
+    representation=None,
 ) -> dict:
     """
-    Optimise node embeddings ``X`` on a Riemannian manifold by minimising
-    ``loss_fn(X, s_A)`` via RiemannianAdam, with ``s_A`` held fixed.
+    Minimise an encoder-decoder loss by RiemannianAdam, with ``s_A`` held fixed.
+
+    Two modes, one loop:
+
+    - **Legacy (single embedding on one manifold):** pass ``X_init`` and
+      ``manifold``. ``X`` is wrapped as a ``ManifoldParameter`` and the loss is
+      ``loss_fn(X, s_A)``.
+    - **Representation:** pass ``representation`` (a
+      :class:`hypegrl.representations.Representation`). Its ``parameters()``
+      (which may span several manifolds) are optimised and the loss is
+      ``loss_fn(representation, s_A)`` — the loss receives the encoder's output
+      and lets the decoder pull whatever it needs from it (``rep.dist()`` for a
+      distance decoder; a future inner-product accessor for an RDPG-style one),
+      so the encoder-decoder contract ``L(s(A), decode(X))`` stays general and
+      chart-agnostic.
+
+    Exactly one mode must be selected.
 
     Parameters
     ----------
     X_init:
-        ``(N, d)`` initial embeddings. Must already lie on ``manifold``
-        (e.g. inside the Poincaré disk).
+        ``(N, d)`` initial embeddings on ``manifold`` (legacy mode).
     s_A:
-        ``(N, N)`` structural similarity matrix, precomputed once from the
-        fixed graph (e.g. forest matrix ``Q = (I+L)^{-1}``, shortest-path
-        distance matrix ``D``). Converted to a float64 tensor on ``device``
-        before the loop; never modified during optimisation.
+        ``(N, N)`` structural similarity ``s(A)``, precomputed once from the
+        fixed graph. Converted to a float64 tensor on ``device``; never modified.
     loss_fn:
-        Callable ``(X: torch.Tensor, s_A: torch.Tensor) -> scalar tensor``
-        computing the encoder-decoder loss. Matches the signature used by
-        ``joint_optimize``, but here ``s_A`` is the precomputed structural
-        similarity rather than the raw adjacency.
+        Legacy: ``(X: Tensor, s_A: Tensor) -> scalar``.
+        Representation: ``(rep: Representation, s_A: Tensor) -> scalar``.
     manifold:
-        A ``geoopt.Manifold`` instance defining the embedding geometry.
-        Used to wrap ``X`` as a ``ManifoldParameter`` for ``RiemannianAdam``.
-    lr:
-        Learning rate for RiemannianAdam.
-    n_steps:
-        Number of gradient steps.
-    grad_clip:
-        Maximum gradient norm for clipping. Set to ``0`` to disable.
-    log_every:
-        Print loss every this many steps. Set to ``0`` to suppress output.
-    stabilize:
-        Re-project ``X`` onto the manifold every this many steps.
-        Passed directly to ``geoopt.optim.RiemannianAdam``.
-    device:
-        Torch device string (``"cpu"``, ``"cuda"``, etc.).
+        ``geoopt.Manifold`` for the legacy mode.
+    representation:
+        A ``Representation`` for the representation mode (mutually exclusive with
+        ``X_init``/``manifold``).
+    lr, n_steps, grad_clip, log_every, stabilize, device:
+        RiemannianAdam settings; ``grad_clip=0`` disables clipping,
+        ``log_every=0`` suppresses output.
 
     Returns
     -------
-    dict with keys:
-
-    - ``X``: ``(N, d)`` NumPy array of final embeddings.
-    - ``loss_history``: list of scalar loss values, one per step.
+    dict with ``loss_history`` and, depending on mode, ``X`` (legacy, ``(N, d)``
+    NumPy) or ``representation`` (optimised in place).
     """
-    device_ = torch.device(device)
+    if representation is not None:
+        if X_init is not None or manifold is not None:
+            raise ValueError(
+                "Pass either representation, or X_init+manifold — not both.")
+    elif X_init is None or manifold is None:
+        raise ValueError("Legacy mode requires both X_init and manifold.")
 
-    # ── Structural similarity (fixed, converted once) ─────────────────────
+    device_ = torch.device(device)
     s_A_t = torch.tensor(s_A, dtype=torch.float64, device=device_)
 
-    # ── Embeddings (ManifoldParameter for RiemannianAdam) ────────────────
-    X = geoopt.ManifoldParameter(
-        torch.tensor(X_init, dtype=torch.float64, device=device_),
-        manifold=manifold,
-    )
+    # ── Parameters + loss closure (the only per-mode difference) ──────────
+    if representation is not None:
+        params = representation.parameters()
 
-    # ── Optimiser ────────────────────────────────────────────────────────
-    optimizer = geoopt.optim.RiemannianAdam([X], lr=lr, stabilize=stabilize)
+        def closure() -> torch.Tensor:
+            return loss_fn(representation, s_A_t)
+    else:
+        X = geoopt.ManifoldParameter(
+            torch.tensor(X_init, dtype=torch.float64, device=device_),
+            manifold=manifold,
+        )
+        params = [X]
+
+        def closure() -> torch.Tensor:
+            return loss_fn(X, s_A_t)
 
     # ── Training loop ────────────────────────────────────────────────────
+    optimizer = geoopt.optim.RiemannianAdam(params, lr=lr, stabilize=stabilize)
     loss_history: list[float] = []
 
     for step in range(n_steps):
         optimizer.zero_grad()
-
-        loss = loss_fn(X, s_A_t)
+        loss = closure()
         loss.backward()
-
         if grad_clip > 0.0:
-            torch.nn.utils.clip_grad_norm_([X], max_norm=grad_clip)
-
+            torch.nn.utils.clip_grad_norm_(params, max_norm=grad_clip)
         optimizer.step()
 
         loss_val = loss.item()
         loss_history.append(loss_val)
-
         if log_every > 0 and (step % log_every == 0 or step == n_steps - 1):
             print(f"Step {step:4d} | Loss: {loss_val:.6f}")
 
-    # ── Extract results ───────────────────────────────────────────────────
-    return {
-        "X":            X.detach().cpu().numpy(),
-        "loss_history": loss_history,
-    }
+    # ── Results ───────────────────────────────────────────────────────────
+    if representation is not None:
+        return {"representation": representation, "loss_history": loss_history}
+    return {"X": X.detach().cpu().numpy(), "loss_history": loss_history}
