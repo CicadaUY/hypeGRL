@@ -187,9 +187,10 @@ class DMercatorEmbedder(HyperbolicEmbedder):
 
         # Fitted state
         self._X: Optional[np.ndarray] = None           # (N, d) Poincaré ball
-        self._r: Optional[np.ndarray] = None           # hyperbolic radial coords
-        self._kappa: Optional[np.ndarray] = None       # hidden degrees (from r)
-        self._kappa_min: Optional[float] = None        # κ_min from init (κ-recovery)
+        self._r: Optional[np.ndarray] = None           # native radial coords (init)
+        self._V: Optional[np.ndarray] = None           # native S^D unit vectors (init)
+        self._kappa: Optional[np.ndarray] = None       # hidden degrees κ_i (init)
+        self._kappa_min: Optional[float] = None        # κ_min from init
         self._nodes: Optional[list] = None
         self._beta_fitted: Optional[float] = None
         self._mu_fitted: Optional[float] = None
@@ -256,10 +257,17 @@ class DMercatorEmbedder(HyperbolicEmbedder):
             self._R_hat = res["R_hat"]
             self._kappa_min = float(np.min(res["kappa"]))
             self._nodes = res["nodes"]
-            # warm-start Poincaré ball point: x = tanh(r/2) · v
-            # (the stereographic image of the hyperboloid point (cosh r, sinh r·v))
+            # Native (S^D × ℝ₊) coordinates, stored directly from the init —
+            # NOT read back from the Poincaré-ball embedding, whose radius
+            # saturates at r≈12.2 (tanh(r/2)→1) for the large radii leaves reach.
+            # These are the authoritative geometry; see native_coordinates().
             r0 = res["r"]
             V0 = res["V"]
+            self._r = r0
+            self._V = V0
+            self._kappa = res["kappa"]
+            # warm-start Poincaré ball point: x = tanh(r/2) · v
+            # (the stereographic image of the hyperboloid point (cosh r, sinh r·v))
             X_warm = np.tanh(r0 / 2.0)[:, None] * V0
         else:
             X_warm = self._X  # placeholder; overwritten below when X_init given
@@ -304,20 +312,45 @@ class DMercatorEmbedder(HyperbolicEmbedder):
 
         self._X = X_opt
 
-        # ── Recover radial coordinate & κ from the refined positions ───────
-        # r_i = d_H(0, x_i) = 2·artanh(‖x_i‖) on the unit Poincaré ball.
-        norms = np.clip(np.linalg.norm(X_opt, axis=1), 0.0, 1.0 - 1e-12)
-        self._r = 2.0 * np.arctanh(norms)
-        # κ_i = κ_min · exp((D/2)(R̂ − r_i)), inverse of the Eq. 7 radial map
-        self._kappa = self._kappa_min * np.exp((D / 2.0) * (R_hat - self._r))
+        # Native (r, V, κ) were stored directly from the init above. The ball
+        # embedding self._X is a lossy projection at large radius, so it is NOT
+        # inverted back into r/κ — that round-trip through the saturating
+        # tanh(r/2) is exactly what collapsed the radial coordinate.
+        # See native_coordinates().
 
         return self
 
     def embeddings(self) -> np.ndarray:
-        """Return ``(N, d)`` Poincaré ball coordinates."""
+        """
+        Return ``(N, d)`` Poincaré ball coordinates.
+
+        Note: the ball chart cannot represent large hyperbolic radii — for
+        ``r ≳ 12`` the map ``tanh(r/2)`` saturates to the boundary, so the
+        leaf nodes D-Mercator places at ``r`` up to ~40 on larger graphs
+        collapse to a common radius here. This is a lossy visualisation /
+        interop projection; the authoritative geometry (unsaturated radius,
+        κ, angles) is :meth:`native_coordinates`. Rows follow ``nodes()`` order.
+        """
         if self._X is None:
             raise RuntimeError("Call fit() before embeddings().")
         return self._X
+
+    def native_coordinates(self) -> dict:
+        """
+        Return the authoritative native (S^D × ℝ₊) coordinates, stored directly
+        from the D-Mercator init (before the lossy Poincaré-ball projection):
+
+        - ``"r"``     : ``(N,)``    hyperbolic radial coordinate (popularity),
+                        does NOT saturate at large radius
+        - ``"kappa"`` : ``(N,)``    hidden degree κ_i
+        - ``"v"``     : ``(N, d)``  unit vectors on S^D (angular / similarity)
+
+        Rows follow ``nodes()`` order. This is the faithful geometry to use for
+        radius-based analysis; :meth:`embeddings` (ball) is for plotting/interop.
+        """
+        if self._r is None:
+            raise RuntimeError("Call fit() before native_coordinates().")
+        return {"r": self._r, "kappa": self._kappa, "v": self._V}
 
     def structural_similarity(self, G: nx.Graph) -> np.ndarray:
         """Return the binary adjacency matrix (D-Mercator ignores edge weights)."""
@@ -360,7 +393,7 @@ class DMercatorEmbedder(HyperbolicEmbedder):
 
     @property
     def kappa(self) -> Optional[np.ndarray]:
-        """Hidden degrees κ_i, recovered from the (refined) radial coordinate."""
+        """Hidden degrees κ_i, from the D-Mercator init (see native_coordinates)."""
         return self._kappa
 
     @property
@@ -385,7 +418,10 @@ class DMercatorEmbedder(HyperbolicEmbedder):
 
     @property
     def radial(self) -> Optional[np.ndarray]:
-        """``(N,)`` hyperbolic radial coordinates r_i = d_H(0, x_i)."""
+        """
+        ``(N,)`` native hyperbolic radial coordinates r_i from the init — not
+        read back from the saturating ball embedding. See native_coordinates.
+        """
         return self._r
 
     @property
