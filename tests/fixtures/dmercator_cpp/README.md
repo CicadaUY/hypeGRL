@@ -23,6 +23,18 @@ dmercator.embed("karate_club.edge", dimension=1)   # -> karate_club.inf_coord
 | `karate_d1.inf_coord`        | Zachary karate club (`nx.karate_club_graph()`) | 1 |
 | `karate_d2.inf_coord`        | Zachary karate club                            | 2 |
 | `balanced_tree_d1.inf_coord` | `nx.balanced_tree(2, 4)`                       | 1 |
+| `openflights_d1.inf_coord`   | OpenFlights airport network (`experiments.datasets.openflights_graph`, N=3304) | 1 |
+
+`openflights_d1.edge` is the exact edge list the C++ was run on; it is
+verified identical (all 19054 edges) to `openflights_graph()`, so the row
+labels align with our node ids. This is the large heavy-tailed benchmark
+(D-Mercator's own paper graph). Its radial ground truth — `ρ(hyp_rad, deg) =
+−0.691`, radius ∈ [17.11, 36.74] — is what confirms `DMercatorEmbedder`'s
+`native_coordinates()` (which gives −0.749 on the same graph), versus the old
+Poincaré-ball readback that collapsed every node to r=12.20 (`ρ ≈ −0.07`). Not
+yet wired into an automated test (the stochastic init stages can't be matched
+bit-for-bit; see below), but retained as the durable reference so the radial
+comparison need not re-run the ~5-min C++ / ~13-min Python init.
 
 Note: the embedder's `dimension` argument is the *similarity-space* dimension
 `D`; the hyperbolic embedding lives in H^{D+1}. In our library `DMercatorEmbedder(d=...)`
