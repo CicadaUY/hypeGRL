@@ -6,6 +6,7 @@ from hypegrl.representations.base import (
     Representation,
     as_tensor,
     build_representation,
+    zero_diagonal,
 )
 from hypegrl.representations.hyperboloid import HyperboloidRepresentation
 from hypegrl.representations.polar import PolarRepresentation
@@ -14,6 +15,7 @@ __all__ = [
     "Representation",
     "as_tensor",
     "build_representation",
+    "zero_diagonal",
     "PolarRepresentation",
     "BallRepresentation",
     "HyperboloidRepresentation",

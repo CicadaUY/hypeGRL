@@ -42,6 +42,24 @@ def as_tensor(x, device: str = "cpu") -> torch.Tensor:
     return torch.as_tensor(x, dtype=torch.float64, device=torch.device(device))
 
 
+def zero_diagonal(D: torch.Tensor) -> torch.Tensor:
+    """
+    Return the ``(N, N)`` distance matrix ``D`` with an exact-zero diagonal,
+    differentiably (``masked_fill`` passes gradients to the off-diagonal and
+    zeros them on the diagonal, whose self-distance has no meaningful gradient).
+
+    Each chart's underlying distance leaves a *different* residue on the
+    diagonal — ``0`` on the ball, ``≈3e-8`` on the hyperboloid (geoopt's guarded
+    ``arccosh``), ``≈1e-15`` on polar (the ``1e-30`` floor inside the sqrt). Every
+    :meth:`Representation.dist` routes through this so the three charts agree
+    *exactly* on the diagonal, and any decoder that touches the full matrix
+    (e.g. a row ``softmax``) sees a clean self-distance of zero.
+    """
+    n = D.shape[0]
+    eye = torch.eye(n, dtype=torch.bool, device=D.device)
+    return D.masked_fill(eye, 0.0)
+
+
 def build_representation(
     rep_cls: "type[Representation]",
     X_init,
@@ -82,7 +100,17 @@ class Representation(ABC):
     - ``to_polar()`` — read the current point set back as ``(r, v)``.
     - ``parameters()`` — the ``geoopt`` parameters ``RiemannianAdam`` steps.
     - ``dist()`` — the ``(N, N)`` pairwise hyperbolic distance from those
-      parameters (autograd-differentiable).
+      parameters (autograd-differentiable, zero diagonal).
+
+    **Differentiable accessor vs. readouts (important):** ``dist()`` is the
+    *live* geometric accessor — it is built from the parameters and carries the
+    gradient, so it is what a loss decodes. The ``to_polar`` / ``to_ball`` /
+    ``to_hyperboloid`` methods are **detached readouts** for inspection and
+    interop (plotting, `embeddings()`, warm-starting a later fit); a decoder
+    built on them would silently receive no gradient. If a future decoder needs a
+    *differentiable* geometric quantity other than distance (e.g. the
+    inner-product an RDPG decoder wants), add a purpose-built live accessor
+    alongside ``dist()`` (``inner()``) rather than differentiating a ``to_*``.
     """
 
     # ------------------------------------------------------------------
@@ -92,18 +120,26 @@ class Representation(ABC):
     @classmethod
     @abstractmethod
     def from_polar(cls, r, v, **cfg) -> "Representation":
+        """Build from canonical polar coordinates ``(r, v)`` (primary constructor)."""
         ...
 
     @abstractmethod
     def to_polar(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Detached readout of the current points as ``(r, v)`` (not for gradients)."""
         ...
 
     @abstractmethod
     def parameters(self) -> list[torch.Tensor]:
+        """The ``geoopt`` parameters ``RiemannianAdam`` steps (may span manifolds)."""
         ...
 
     @abstractmethod
     def dist(self) -> torch.Tensor:
+        """
+        The ``(N, N)`` pairwise hyperbolic distance — the **live, differentiable**
+        geometric accessor a loss decodes. Built from :meth:`parameters`, with an
+        exact-zero diagonal (see :func:`zero_diagonal`).
+        """
         ...
 
     # ------------------------------------------------------------------
@@ -127,12 +163,18 @@ class Representation(ABC):
     # ------------------------------------------------------------------
 
     def to_ball(self) -> torch.Tensor:
-        """Poincaré-ball coordinates (saturates past ``r ≈ 12`` — for plots)."""
+        """
+        Detached Poincaré-ball coordinates (saturates past ``r ≈ 12`` — for
+        plotting / interop, not gradients; see the class differentiability note).
+        """
         return polar_to_ball_torch(*self.to_polar())
 
     def to_hyperboloid(self) -> torch.Tensor:
-        """Hyperboloid coordinates (exact to ``r ≈ 350``)."""
+        """
+        Detached hyperboloid coordinates (exact to ``r ≈ 350`` — for interop, not
+        gradients; see the class differentiability note).
+        """
         return polar_to_hyperboloid_torch(*self.to_polar())
 
 
-__all__ = ["Representation", "as_tensor", "build_representation"]
+__all__ = ["Representation", "as_tensor", "build_representation", "zero_diagonal"]

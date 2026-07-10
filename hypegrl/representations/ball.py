@@ -16,7 +16,7 @@ import torch
 
 from hypegrl.manifolds.conversions import ball_to_polar_torch, polar_to_ball_torch
 from hypegrl.manifolds.poincare import POINCARE_BALL
-from hypegrl.representations.base import Representation, as_tensor
+from hypegrl.representations.base import Representation, as_tensor, zero_diagonal
 
 
 class BallRepresentation(Representation):
@@ -38,7 +38,8 @@ class BallRepresentation(Representation):
         return [self._X]
 
     def dist(self) -> torch.Tensor:
-        return POINCARE_BALL.dist(self._X.unsqueeze(1), self._X.unsqueeze(0))
+        return zero_diagonal(
+            POINCARE_BALL.dist(self._X.unsqueeze(1), self._X.unsqueeze(0)))
 
 
 __all__ = ["BallRepresentation"]

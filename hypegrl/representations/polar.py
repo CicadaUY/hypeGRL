@@ -21,7 +21,7 @@ import torch
 import torch.nn.functional as F
 
 from hypegrl.manifolds.polar import polar_distances_torch
-from hypegrl.representations.base import Representation, as_tensor
+from hypegrl.representations.base import Representation, as_tensor, zero_diagonal
 
 _SPHERE = geoopt.Sphere()
 _EUCLIDEAN = geoopt.Euclidean()
@@ -54,7 +54,7 @@ class PolarRepresentation(Representation):
         return [self._u, self._v]
 
     def dist(self) -> torch.Tensor:
-        return polar_distances_torch(self._radius(), self._v)
+        return zero_diagonal(polar_distances_torch(self._radius(), self._v))
 
 
 __all__ = ["PolarRepresentation"]

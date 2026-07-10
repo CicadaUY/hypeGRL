@@ -25,7 +25,7 @@ from hypegrl.manifolds.conversions import (
     polar_to_hyperboloid_torch,
 )
 from hypegrl.manifolds.lorentz import StableLorentz
-from hypegrl.representations.base import Representation, as_tensor
+from hypegrl.representations.base import Representation, as_tensor, zero_diagonal
 
 
 class HyperboloidRepresentation(Representation):
@@ -51,7 +51,8 @@ class HyperboloidRepresentation(Representation):
         return [self._H]
 
     def dist(self) -> torch.Tensor:
-        return self._manifold.dist(self._H.unsqueeze(1), self._H.unsqueeze(0))
+        return zero_diagonal(
+            self._manifold.dist(self._H.unsqueeze(1), self._H.unsqueeze(0)))
 
 
 __all__ = ["HyperboloidRepresentation"]
