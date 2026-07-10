@@ -103,7 +103,7 @@ class HyperbolicEmbedder(ABC):
         degree); methods that keep the input order return ``list(G.nodes())``. Pass
         it to a plotter's ``nodes=`` argument to align a plot with the embedding::
 
-            plot_polar(G, emb.embeddings(), nodes=emb.nodes())
+            plot_polar(G, emb.embeddings_representation().to_polar(), nodes=emb.nodes())
 
         Concrete embedders record the order in ``self._nodes`` during :meth:`fit`.
         """

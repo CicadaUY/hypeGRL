@@ -7,10 +7,11 @@ on a polar disk, with popular (central, small-radius) nodes near the origin and
 peripheral nodes near the rim.
 
 This is a property of the **representation**, not of any particular embedder: it
-works for any 2D Poincaré-ball embedding, whatever produced it (D-Mercator,
-Poincaré maps, HyperMap, …). It is, in particular, the polar layout used by the
-Mercator / D-Mercator papers and the official D-Mercator C++ tool, which makes it
-handy for eyeballing such embeddings against that reference.
+takes the exact polar ``(r, v)`` readout (``Representation.to_polar()``) of any 2D
+hyperbolic embedding, whatever produced it (D-Mercator, Poincaré maps, HyperMap,
+…). It is, in particular, the polar layout used by the Mercator / D-Mercator
+papers and the official D-Mercator C++ tool, which makes it handy for eyeballing
+such embeddings against that reference.
 
 Companion to :func:`hypegrl.visualization.disk.plot_poincare_graph`, which draws
 the same kind of embedding on the (Cartesian) Poincaré disk.
@@ -26,9 +27,14 @@ import networkx as nx
 import numpy as np
 
 
+def _as_np(a) -> np.ndarray:
+    """Coerce a numpy array or a (detached) torch tensor to a numpy array."""
+    return a.detach().cpu().numpy() if hasattr(a, "detach") else np.asarray(a)
+
+
 def plot_polar(
     G: nx.Graph,
-    X: np.ndarray,
+    polar_coords: tuple,
     nodes: Optional[Sequence] = None,
     unknown_edges: Optional[list[tuple[int, int]]] = None,
     node_color: Union[str, Sequence] = "#3a7ebf",
@@ -44,19 +50,21 @@ def plot_polar(
     """
     Plot a graph in the polar (native) hyperbolic representation.
 
-    Each node is placed at angle ``θ_i = atan2(y_i, x_i)`` and hyperbolic radius
-    ``r_i = 2·arctanh(‖x_i‖)``, derived from its Poincaré-ball embedding ``x_i``.
-    Known edges are drawn as solid polar segments; ``unknown_edges`` (if given)
-    are drawn dashed in a contrasting colour, whether or not they exist in ``G``.
+    Each node is placed at its **hyperbolic radius** ``r_i`` (used directly — no
+    ball round-trip, so large radii are not saturated) and angle
+    ``θ_i = atan2(v_{i,1}, v_{i,0})`` from its unit direction ``v_i``. Known edges
+    are drawn as solid polar segments; ``unknown_edges`` (if given) are drawn
+    dashed in a contrasting colour, whether or not they exist in ``G``.
 
-    The polar layout is 2-dimensional, so this expects 2-column embeddings. It is
-    agnostic to which embedder produced ``X`` — D-Mercator (``d=2``), Poincaré
-    maps, HyperMap, etc.
+    The polar layout is 2-dimensional, so ``v`` must have 2 columns. It is
+    agnostic to which embedder produced the coordinates — D-Mercator (``d=2``),
+    Poincaré maps, HyperMap, etc.
 
     Node-row mapping
     ----------------
-    ``X[i]`` is assumed to correspond to node ``nodes[i]``. Every embedder reports
-    the row order of its ``embeddings()`` via ``embedder.nodes()`` — pass that as
+    Row ``i`` of ``polar_coords`` is assumed to correspond to node ``nodes[i]``.
+    Every embedder reports the row order of its ``embeddings()`` /
+    ``embeddings_representation()`` via ``embedder.nodes()`` — pass that as
     ``nodes`` (essential for reordering embedders like ``HyperMapEmbedder`` and
     ``DMercatorEmbedder``). If ``nodes`` is ``None``, the rows are assumed to be
     indexed by integer node labels ``0..N-1`` (matching ``G``).
@@ -65,18 +73,24 @@ def plot_polar(
     ----------
     G:
         Original NetworkX graph. Determines which edges are *known*.
-    X:
-        ``(N, 2)`` array of Poincaré-ball embeddings.
+    polar_coords:
+        The exact polar coordinates ``(r, v)`` as returned by
+        ``Representation.to_polar()`` — e.g.
+        ``emb.embeddings_representation().to_polar()``. ``r`` is the ``(N,)``
+        hyperbolic radius (used directly, so large radii are *not* saturated) and
+        ``v`` the ``(N, 2)`` unit direction. Numpy arrays or detached torch
+        tensors are both accepted.
     nodes:
-        Sequence mapping row index ``i`` of ``X`` to a node label in ``G``.
-        Defaults to ``range(N)``. Typically ``embedder.nodes()``.
+        Sequence mapping row index ``i`` of ``polar_coords`` to a node label in
+        ``G``. Defaults to ``range(N)``. Typically ``embedder.nodes()``.
     unknown_edges:
         List of ``(m, n)`` node-label tuples to render as dashed edges, drawn for
         visual reference whether or not they exist in ``G`` (no weight
         annotations).
     node_color:
         A single colour, or a per-node sequence of colours/values (length ``N``,
-        ordered like ``X``). Useful for colouring by community or by degree.
+        ordered like the rows of ``polar_coords``). Useful for colouring by
+        community or by degree.
     ax:
         Existing **polar** ``Axes`` to draw on. If ``None``, a new polar figure
         is created. A non-polar ``Axes`` will raise.
@@ -104,7 +118,7 @@ def plot_polar(
     Raises
     ------
     AssertionError
-        If ``X`` does not have exactly 2 columns.
+        If ``v`` does not have exactly 2 columns (the polar plot is 2D).
 
     Examples
     --------
@@ -113,26 +127,28 @@ def plot_polar(
     >>> from hypegrl.visualization import plot_polar
     >>> G = nx.karate_club_graph()
     >>> emb = DMercatorEmbedder(d=2, random_state=0).fit(G)
-    >>> fig = plot_polar(G, emb.embeddings(), nodes=emb.nodes())
+    >>> fig = plot_polar(
+    ...     G, emb.embeddings_representation().to_polar(), nodes=emb.nodes())
     """
-    assert X.shape[1] == 2, (
-        "plot_polar draws the polar (native) representation, which is 2D; "
-        f"got embeddings of shape {X.shape}."
+    # ── Polar coordinates (r, θ) straight from the (r, v) readout ─────────────
+    # ``polar_coords`` is the exact ``(r, v)`` from ``Representation.to_polar()``:
+    # the true hyperbolic radius ``r`` is used directly, so there is no ball
+    # round-trip and hence no rim saturation collapsing large-radius nodes.
+    r, v = polar_coords
+    r = _as_np(r)
+    v = _as_np(v)
+    assert v.shape[1] == 2, (
+        "plot_polar draws the 2D polar representation; the direction ``v`` must "
+        f"have 2 columns, got shape {v.shape}."
     )
+    theta = np.arctan2(v[:, 1], v[:, 0])
+    n_rows = r.shape[0]
 
     unknown_edges = unknown_edges or []
 
-    # ── Polar coordinates from the Poincaré-ball embedding ────────────────────
-    theta = np.arctan2(X[:, 1], X[:, 0])
-    norms = np.linalg.norm(X, axis=1)
-    # Guard the boundary: arctanh(1) = ∞. Points should be inside the ball, but
-    # numerical drift can land exactly on (or just past) the rim.
-    norms = np.clip(norms, 0.0, 1.0 - 1e-12)
-    r = 2.0 * np.arctanh(norms)
-
     # ── Row index for each node label ─────────────────────────────────────────
     if nodes is None:
-        node2row = {i: i for i in range(X.shape[0])}
+        node2row = {i: i for i in range(n_rows)}
     else:
         node2row = {node: i for i, node in enumerate(nodes)}
 
@@ -173,7 +189,7 @@ def plot_polar(
         linewidths=0.8, zorder=5,
     )
     if show_node_labels:
-        labels = list(nodes) if nodes is not None else list(range(X.shape[0]))
+        labels = list(nodes) if nodes is not None else list(range(n_rows))
         for i, label in enumerate(labels):
             ax.text(
                 theta[i], r[i], str(label),
