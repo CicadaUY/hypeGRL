@@ -12,7 +12,17 @@ guarded ``arccosh``).
 the radius: the default ``1e3`` gives ``r ≤ arcsinh(1e3) ≈ 7.6``, so a warm start
 at larger radius is squashed on construction. To expose the *distance* failure
 (rather than the clamp) in the comparison, build with a large ``max_norm``
-(e.g. ``1e18``, ``r ≤ ~42``); each instance owns its own manifold.
+(e.g. ``1e18``, ``r ≤ ~42``).
+
+This is the **only** representation that owns its manifold (``self._manifold``),
+because ``StableLorentz`` is the only one with per-instance state: ``max_norm`` is
+graph-dependent (tuned per fit) and drives ``RiemannianAdam``'s retraction, so a
+fresh instance is built per representation rather than sharing or mutating a
+global. ``BallRepresentation`` / ``PolarRepresentation`` instead reference the
+fixed, parameterless module-level manifolds (``POINCARE_BALL`` / ``Sphere`` +
+``Euclidean``). Curvature is *not* a per-instance manifold parameter here: every
+chart fixes ``k = 1``, and the metric scale (curvature) is a global quantity
+absorbed into the loss, never stored in a chart.
 """
 
 from __future__ import annotations
