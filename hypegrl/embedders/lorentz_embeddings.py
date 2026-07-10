@@ -129,7 +129,25 @@ from hypegrl.embedders.base import HyperbolicEmbedder
 from hypegrl.inference.joint_optimizer import joint_optimize
 from hypegrl.inference.riemannian_optimizer import riemannian_optimize
 from hypegrl.manifolds.lorentz import LORENTZ, StableLorentz
-from hypegrl.manifolds.poincare import lorentz_to_poincare, poincare_to_lorentz
+from hypegrl.manifolds.poincare import poincare_to_lorentz
+from hypegrl.representations import (
+    BallRepresentation,
+    HyperboloidRepresentation,
+    PolarRepresentation,
+    build_representation,
+)
+
+# Chart in which the embedding is optimised. The default is the eponymous
+# **hyperboloid** (this method *is* the Lorentz-model instantiation, and the
+# StableLorentz clamp is what makes its aggressive rate safe); polar and ball are
+# selectable for comparison, since the ranking loss is a function of the pairwise
+# distance only. The embedder's ``max_norm`` is forwarded to the chart
+# constructor (only the hyperboloid uses it).
+_REPRESENTATIONS = {
+    "polar": PolarRepresentation,
+    "ball": BallRepresentation,
+    "hyperboloid": HyperboloidRepresentation,
+}
 
 # ---------------------------------------------------------------------------
 # Distance decoder
@@ -268,10 +286,30 @@ def lorentz_ranking_nll(
     Scalar loss tensor.
     """
     D = lorentz_distance_matrix(X, manifold)              # (N, N)
+    return lorentz_ranking_nll_from_dist(
+        D, A, n_negatives, unknown_mask, weighted, eps)
 
+
+def lorentz_ranking_nll_from_dist(
+    D: torch.Tensor,
+    A: torch.Tensor,
+    n_negatives: int,
+    unknown_mask: torch.Tensor,
+    weighted: bool,
+    eps: float = 1e-12,
+) -> torch.Tensor:
+    """
+    Soft-ranking NLL from a pairwise-distance matrix ``D`` (the chart-agnostic
+    core; :func:`lorentz_ranking_nll` is the ``X``-based hyperboloid wrapper).
+
+    ``D`` is the ``(N, N)`` hyperbolic distance matrix — from any chart, e.g.
+    ``rep.dist()``. The negative set ``N(i, j)`` is sampled from ``A`` (known,
+    less-similar nodes), so the combinatorial part is chart-independent; the
+    ranking energy uses ``D``.
+    """
     i_idx, j_idx = torch.nonzero(A, as_tuple=True)        # (P,), (P,)
     if i_idx.numel() == 0:
-        # No edges: nothing to rank. Keep X in the graph for a zero gradient.
+        # No edges: nothing to rank. Keep D in the graph for a zero gradient.
         return D.sum() * 0.0
 
     thresh = A[i_idx, j_idx]                              # (P,) = K_ij
@@ -374,24 +412,33 @@ class LorentzEmbeddingsEmbedder(HyperbolicEmbedder):
         init_scale: float = 1e-3,     # paper: U(-0.001, 0.001)
         max_norm: float = 1e3,        # sweep-tuned (reference uses 1e2)
         random_state: Optional[int] = None,
+        representation: str = "hyperboloid",
     ):
-        self.d            = d
-        self.n_negatives  = n_negatives
-        self.lr_X         = lr_X
-        self.lr_a         = lr_a
-        self.n_steps      = n_steps
-        self.regularize_a = regularize_a
-        self.grad_clip    = grad_clip
-        self.log_every    = log_every
-        self.device       = device
-        self.init_scale   = init_scale
-        self.max_norm     = max_norm
-        self.random_state = random_state
+        if representation not in _REPRESENTATIONS:
+            raise ValueError(
+                f"representation must be one of {sorted(_REPRESENTATIONS)}; "
+                f"got {representation!r}.")
+        self.d              = d
+        self.n_negatives    = n_negatives
+        self.lr_X           = lr_X
+        self.lr_a           = lr_a
+        self.n_steps        = n_steps
+        self.regularize_a   = regularize_a
+        self.grad_clip      = grad_clip
+        self.log_every      = log_every
+        self.device         = device
+        self.init_scale     = init_scale
+        self.max_norm       = max_norm
+        self.random_state   = random_state
+        self.representation = representation
 
         # Per-instance manifold so max_norm is tunable without mutating the
         # shared LORENTZ. Stateless besides (k, max_norm), so this is cheap.
+        # Used by decode() and the X-based distance(); the hyperboloid
+        # representation builds its own StableLorentz with the same max_norm.
         self.manifold = StableLorentz(max_norm=max_norm)
 
+        self._rep = None                                   # fitted Representation
         self._X: Optional[np.ndarray]              = None   # Poincaré ball (N, d)
         self._X_hyper: Optional[np.ndarray]        = None   # hyperboloid (N, d+1)
         self._a_omega: Optional[np.ndarray]        = None
@@ -449,26 +496,36 @@ class LorentzEmbeddingsEmbedder(HyperbolicEmbedder):
         self._unknown_edges = unknown_edges
         self._unknown_mask = self._build_unknown_mask(N, unknown_edges)
 
+        # Build the representation (chosen chart) from the hyperboloid warm start
+        # (or an incoming Representation of any chart). max_norm is forwarded to
+        # the constructor; only the hyperboloid chart uses it. The ranking loss
+        # pulls rep.dist(), so it is chart-agnostic.
+        rep = build_representation(
+            _REPRESENTATIONS[self.representation], X_init,
+            input_chart="hyperboloid", device=self.device, max_norm=self.max_norm,
+        )
+
+        def loss_fn(rep_, A_t: torch.Tensor) -> torch.Tensor:
+            return self._loss_from_dist(rep_.dist(), A_t)
+
         if not unknown_edges:
             # Fixed graph: structural similarity is the (constant) adjacency.
             result = riemannian_optimize(
-                X_init    = X_init,
-                s_A       = self.structural_similarity(G),
-                loss_fn   = self.distance,
-                manifold  = self.manifold,
-                lr        = self.lr_X,
-                n_steps   = self.n_steps,
-                grad_clip = self.grad_clip,
-                log_every = self.log_every,
-                device    = self.device,
+                representation = rep,
+                s_A            = self.structural_similarity(G),
+                loss_fn        = loss_fn,
+                lr             = self.lr_X,
+                n_steps        = self.n_steps,
+                grad_clip      = self.grad_clip,
+                log_every      = self.log_every,
+                device         = self.device,
             )
             result["a_omega"] = np.array([])
         else:
             result = joint_optimize(
                 G             = G,
-                loss_fn       = self.distance,
-                X_init        = X_init,
-                manifold      = self.manifold,
+                representation = rep,
+                loss_fn       = loss_fn,
                 unknown_edges = unknown_edges,
                 a_omega_init  = a_omega_init,
                 lr_X          = self.lr_X,
@@ -481,37 +538,25 @@ class LorentzEmbeddingsEmbedder(HyperbolicEmbedder):
                 verbose       = self.log_every > 0,
             )
 
-        self._X_hyper      = result["X"]
-        self._X            = lorentz_to_poincare(self._X_hyper)
+        self._X_hyper      = rep.to_hyperboloid().detach().cpu().numpy()
+        self._X            = rep.to_ball().detach().cpu().numpy()
+        self._rep          = rep
         self._a_omega      = result["a_omega"]
         self._loss_history = result["loss_history"]
         self._G            = G
         self._nodes        = list(G.nodes())   # rows follow G.nodes() (no reorder)
         return self
 
-    def distance(self, X: torch.Tensor, A: torch.Tensor) -> torch.Tensor:
+    def _loss_from_dist(self, D: torch.Tensor, A: torch.Tensor) -> torch.Tensor:
         """
-        Soft-ranking loss in the Lorentz model.
-
-        Positives are weighted by ``K_{ij}`` only when unknown edges are
-        present (so ``Omega = {}`` reproduces the paper's unweighted Eq. 12);
-        negatives are drawn from known, less-similar nodes.
-
-        Parameters
-        ----------
-        X : torch.Tensor
-            ``(N, d+1)`` hyperboloid embeddings.
-        A : torch.Tensor
-            ``(N, N)`` similarity / adjacency matrix (may contain imputed
-            unknown entries).
-
-        Returns
-        -------
-        Scalar loss tensor.
+        Soft-ranking loss from a pairwise-distance matrix ``D`` (e.g.
+        ``rep.dist()``). Positives are weighted by ``K_{ij}`` only when unknown
+        edges are present (so ``Omega = {}`` reproduces the paper's unweighted
+        Eq. 12); negatives come from known, less-similar nodes.
         """
         weighted = len(self._unknown_edges) > 0
-        return lorentz_ranking_nll(
-            X, A, self.n_negatives, self._unknown_mask, weighted, self.manifold
+        return lorentz_ranking_nll_from_dist(
+            D, A, self.n_negatives, self._unknown_mask, weighted
         )
 
     def embeddings(self) -> np.ndarray:
@@ -556,24 +601,28 @@ class LorentzEmbeddingsEmbedder(HyperbolicEmbedder):
         """
         return nx.to_numpy_array(G, dtype=np.float64)
 
-    def decode(self, X: np.ndarray) -> np.ndarray:
+    def decode(self, X) -> np.ndarray:
         """
         Decoder output: the pairwise Lorentz distance matrix.
 
         Parameters
         ----------
         X:
-            ``(N, d)`` Poincaré-ball embeddings (the output of
-            :meth:`embeddings`). Mapped back to the hyperboloid before the
-            distance is computed; the two models are isometric, so the distances
-            are identical either way.
+            ``(N, d)`` Poincaré-ball coordinates (the output of
+            :meth:`embeddings`), or a fitted
+            :class:`~hypegrl.representations.Representation`. Coordinates are
+            mapped back to the hyperboloid before the distance is computed; a
+            representation uses its exact ``rep.dist()`` directly. The models are
+            isometric, so the distances are identical either way.
 
         Returns
         -------
         ``(N, N)`` NumPy array of hyperbolic distances.
         """
+        if hasattr(X, "dist"):
+            return X.dist().detach().cpu().numpy()
         H = torch.tensor(poincare_to_lorentz(X), dtype=torch.float64)
-        return lorentz_distance_matrix(H, self.manifold).detach().numpy()
+        return lorentz_distance_matrix(H, self.manifold).detach().cpu().numpy()
 
     # ------------------------------------------------------------------
     # Capability flags

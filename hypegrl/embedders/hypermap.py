@@ -61,6 +61,22 @@ from hypegrl.manifolds.poincare import (
     poincare_to_polar,
     polar_to_poincare,
 )
+from hypegrl.representations import (
+    BallRepresentation,
+    HyperboloidRepresentation,
+    PolarRepresentation,
+    build_representation,
+)
+
+# Chart in which the gradient refinement runs. HyperMap's Fermi-Dirac NLL is a
+# function of the pairwise distance only, so the chart is neutral; polar is the
+# default (exact at all radii, where the ball saturates past r≈12). The greedy
+# init still produces its 2D Poincaré-ball warm start regardless.
+_REPRESENTATIONS = {
+    "polar": PolarRepresentation,
+    "ball": BallRepresentation,
+    "hyperboloid": HyperboloidRepresentation,
+}
 
 # ---------------------------------------------------------------------------
 # Fermi-Dirac loss (autograd-compatible, arbitrary d)
@@ -116,22 +132,40 @@ def fermi_dirac_nll(
     Scalar NLL tensor.
     """
     D = manifold.dist(X.unsqueeze(1), X.unsqueeze(0))  # (N, N)
+    return fermi_dirac_nll_from_dist(D, A, R, zeta_over_2T, eps)
 
-    N   = X.shape[0]
 
-    R_t = torch.as_tensor(R, dtype=X.dtype, device=X.device)
+def fermi_dirac_nll_from_dist(
+    D: torch.Tensor,
+    A: torch.Tensor,
+    R,
+    zeta_over_2T: float,
+    eps: float = 1e-12,
+) -> torch.Tensor:
+    """
+    Fermi-Dirac NLL from a pairwise-distance matrix ``D`` (the chart-agnostic
+    core; :func:`fermi_dirac_nll` is the ``X``-based Poincaré-ball wrapper).
+
+    ``D`` is the ``(N, N)`` hyperbolic distance matrix — from any chart, e.g.
+    ``rep.dist()``. The per-pair threshold is the younger node's ``R`` (larger
+    index, rows being degree-descending), matching :meth:`decode` and the greedy
+    initialisation; a scalar ``R`` is broadcast as a single global threshold.
+    """
+    N = D.shape[0]
+
+    R_t = torch.as_tensor(R, dtype=D.dtype, device=D.device)
     if R_t.ndim == 0:
         R_pair = R_t                       # scalar: single global threshold
     else:
         # per-pair threshold = younger node's R = R[max(i, j)]
-        idx    = torch.arange(N, device=X.device)
+        idx    = torch.arange(N, device=D.device)
         R_pair = R_t[torch.maximum(idx.unsqueeze(1), idx.unsqueeze(0))]
 
     P = torch.sigmoid(zeta_over_2T * (R_pair - D))
     P = torch.clamp(P, eps, 1.0 - eps)
 
     mask = torch.triu(
-        torch.ones(N, N, dtype=torch.bool, device=X.device), diagonal=1
+        torch.ones(N, N, dtype=torch.bool, device=D.device), diagonal=1
     )
     nll = -(A[mask] * torch.log(P[mask])
             + (1.0 - A[mask]) * torch.log(1.0 - P[mask]))
@@ -313,23 +347,30 @@ class HyperMapEmbedder(HyperbolicEmbedder):
         log_every: int = 50,
         device: str = "cpu",
         verbose_init: bool = True,
+        representation: str = "polar",
     ):
-        self.d            = d
-        self.gamma        = gamma
-        self.T            = T
-        self.zeta         = zeta
-        self.fix_radii    = fix_radii
-        self.k_speedup    = k_speedup
-        self.corrections  = corrections
-        self.n_steps      = n_steps
-        self.lr_X         = lr_X
-        self.lr_a         = lr_a
-        self.regularize_a = regularize_a
-        self.grad_clip    = grad_clip
-        self.log_every    = log_every
-        self.device       = device
-        self.verbose_init = verbose_init
+        if representation not in _REPRESENTATIONS:
+            raise ValueError(
+                f"representation must be one of {sorted(_REPRESENTATIONS)}; "
+                f"got {representation!r}.")
+        self.d              = d
+        self.gamma          = gamma
+        self.T              = T
+        self.zeta           = zeta
+        self.fix_radii      = fix_radii
+        self.k_speedup      = k_speedup
+        self.corrections    = corrections
+        self.n_steps        = n_steps
+        self.lr_X           = lr_X
+        self.lr_a           = lr_a
+        self.regularize_a   = regularize_a
+        self.grad_clip      = grad_clip
+        self.log_every      = log_every
+        self.device         = device
+        self.verbose_init   = verbose_init
+        self.representation = representation
 
+        self._rep = None                                     # fitted Representation
         self._X             : Optional[np.ndarray]           = None
         self._a_omega       : Optional[np.ndarray]           = None
         self._loss_history  : Optional[list[float]]          = None
@@ -410,15 +451,25 @@ class HyperMapEmbedder(HyperbolicEmbedder):
                 self._thetas_init, self._r_init, self.d, self.zeta
             )
 
+        # ── Build the representation (chosen chart) from the ball warm start ──
+        # (or an incoming Representation of any chart). The Fermi-Dirac NLL pulls
+        # rep.dist(), so it is chart-agnostic; embeddings() reads back the ball
+        # projection. Rows stay in degree-descending (nodes_sorted) order.
+        rep = build_representation(
+            _REPRESENTATIONS[self.representation], X_init,
+            input_chart="ball", device=self.device,
+        )
+
         # ── Stage 2: gradient refinement ─────────────────────────────────
         if self.n_steps == 0:
-            self._X            = X_init
+            self._X            = rep.to_ball().detach().cpu().numpy()
+            self._rep          = rep
             self._a_omega      = np.array([])
             self._loss_history = []
             return self
 
         # joint_optimize builds the adjacency from the graph in its node-iteration
-        # order, but X_init, self._R and the returned embeddings are all in
+        # order, but rep, self._R and the returned embeddings are all in
         # degree-descending (nodes_sorted) order. Reorder the graph so the
         # adjacency rows line up with the embedding rows (and with the per-node
         # thresholds in self._R); otherwise the loss pairs each hyperbolic
@@ -438,11 +489,16 @@ class HyperMapEmbedder(HyperbolicEmbedder):
         )
         unknown_sorted = [(order[u], order[v]) for (u, v) in unknown_edges]
 
+        R = self._R
+        zeta_over_2T = self.zeta / (2.0 * self.T)
+
+        def loss_fn(rep_, A_t: torch.Tensor) -> torch.Tensor:
+            return fermi_dirac_nll_from_dist(rep_.dist(), A_t, R, zeta_over_2T)
+
         result = joint_optimize(
-            G           = G_sorted,
-            loss_fn     = self.distance,
-            X_init      = X_init,
-            manifold    = POINCARE_BALL,
+            G            = G_sorted,
+            representation = rep,
+            loss_fn      = loss_fn,
             unknown_edges   = unknown_sorted,
             a_omega_init    = a_omega_init,
             lr_X         = self.lr_X,
@@ -455,23 +511,13 @@ class HyperMapEmbedder(HyperbolicEmbedder):
             verbose      = self.log_every > 0,
         )
 
-        self._X             = result["X"]
+        self._X             = rep.to_ball().detach().cpu().numpy()
+        self._rep           = rep
         self._a_omega       = result["a_omega"]
         self._loss_history  = result["loss_history"]
         self._unknown_edges = unknown_edges
         self._G             = G
         return self
-
-    def distance(self, X: torch.Tensor, A: torch.Tensor) -> torch.Tensor:
-        # Per-node thresholds R_i (Eq. 3): the loss uses the younger node's R
-        # for each pair, consistent with the greedy init and decode().
-        return fermi_dirac_nll(
-            X,
-            A,
-            self._R,
-            self.zeta / (2.0 * self.T),
-            POINCARE_BALL
-        )
 
     def embeddings(self) -> np.ndarray:
         """
@@ -506,16 +552,19 @@ class HyperMapEmbedder(HyperbolicEmbedder):
         """
         return (nx.to_numpy_array(G, dtype=np.float64) > 0.0).astype(np.float64)
 
-    def decode(self, X: np.ndarray) -> np.ndarray:
+    def decode(self, X) -> np.ndarray:
         """
-        Compute the Fermi-Dirac connection probability matrix from embeddings.
+        Compute the Fermi-Dirac connection probability matrix from an embedding.
 
         Works for any embedding dimension d.
 
         Parameters
         ----------
         X:
-            ``(N, d)`` Poincaré ball embeddings.
+            ``(N, d)`` Poincaré-ball coordinates, or a fitted
+            :class:`~hypegrl.representations.Representation` (whose exact
+            ``rep.dist()`` is used, avoiding ball saturation). Rows must be in
+            :meth:`nodes` (degree-descending) order to match the per-node ``R``.
 
         Returns
         -------
@@ -523,10 +572,13 @@ class HyperMapEmbedder(HyperbolicEmbedder):
         """
         if self._R is None:
             raise RuntimeError("Call fit() before decode().")
-        X_t      = torch.tensor(X, dtype=torch.float64)
+        if hasattr(X, "dist"):
+            D = X.dist().detach()
+        else:
+            X_t = torch.as_tensor(X, dtype=torch.float64)
+            D = POINCARE_BALL.dist(X_t.unsqueeze(1), X_t.unsqueeze(0))
         R_t      = torch.tensor(self._R, dtype=torch.float64)
-        D        = POINCARE_BALL.dist(X_t.unsqueeze(1), X_t.unsqueeze(0))
-        N        = X.shape[0]
+        N        = D.shape[0]
         idx      = torch.arange(N)
         # Rows are degree-descending, so the larger index is the node that
         # appeared later ("younger"). The pairwise connection probability uses
@@ -536,7 +588,7 @@ class HyperMapEmbedder(HyperbolicEmbedder):
         P        = torch.sigmoid(
             -(self.zeta / (2.0 * self.T)) * (D - R_pair)
         )
-        return P.detach().numpy()
+        return P.detach().cpu().numpy()
 
     def estimate_temperature(
         self,

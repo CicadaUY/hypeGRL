@@ -73,6 +73,22 @@ from hypegrl.embedders.base import HyperbolicEmbedder
 from hypegrl.inference.joint_optimizer import joint_optimize
 from hypegrl.inference.riemannian_optimizer import riemannian_optimize
 from hypegrl.manifolds.poincare import POINCARE_BALL
+from hypegrl.representations import (
+    BallRepresentation,
+    HyperboloidRepresentation,
+    PolarRepresentation,
+    build_representation,
+)
+
+# Chart in which the embedding is optimised. The default is the eponymous
+# Poincaré **ball** (this method *is* the Poincaré-ball instantiation); polar and
+# hyperboloid are selectable for numerical comparison, since the ranking /
+# Fermi-Dirac losses are functions of the pairwise distance only.
+_REPRESENTATIONS = {
+    "polar": PolarRepresentation,
+    "ball": BallRepresentation,
+    "hyperboloid": HyperboloidRepresentation,
+}
 
 # ---------------------------------------------------------------------------
 # Distance decoder
@@ -193,7 +209,24 @@ def ranking_nll(
     Scalar loss tensor.
     """
     D = poincare_distance_matrix(X, manifold)              # (N, N)
+    return ranking_nll_from_dist(D, A, n_negatives, eps, node_weights)
 
+
+def ranking_nll_from_dist(
+    D: torch.Tensor,
+    A: torch.Tensor,
+    n_negatives: int = 10,
+    eps: float = 1e-12,
+    node_weights: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """
+    Soft-ranking NLL from a pairwise-distance matrix ``D`` (the chart-agnostic
+    core; :func:`ranking_nll` is the ``X``-based Poincaré-ball wrapper).
+
+    ``D`` is the ``(N, N)`` hyperbolic distance matrix — from any chart, e.g.
+    ``rep.dist()``. Negatives are sampled from ``A`` (known non-edges), so the
+    combinatorial part is chart-independent; the ranking energy uses ``D``.
+    """
     neg_idx = sample_negatives(A.detach(), n_negatives, node_weights)  # (N, n_neg)
     d_neg = torch.gather(D, 1, neg_idx)                    # (N, n_neg)
     exp_neg_sum = torch.exp(-d_neg).sum(dim=1)             # (N,)
@@ -275,14 +308,29 @@ def fermi_dirac_nll(
     -------
     Scalar loss tensor.
     """
-    P = fermi_dirac_decoder(X, r, t, manifold)
-    P = torch.clamp(P, eps, 1.0 - eps)
+    D = poincare_distance_matrix(X, manifold)
+    return fermi_dirac_nll_from_dist(D, A, r, t, eps)
+
+
+def fermi_dirac_nll_from_dist(
+    D: torch.Tensor,
+    A: torch.Tensor,
+    r: float,
+    t: float,
+    eps: float = 1e-12,
+) -> torch.Tensor:
+    """
+    Fermi-Dirac Bernoulli cross-entropy from a pairwise-distance matrix ``D`` (the
+    chart-agnostic core; :func:`fermi_dirac_nll` is the ``X``-based Poincaré-ball
+    wrapper). ``D`` may come from any chart, e.g. ``rep.dist()``.
+    """
+    P = torch.clamp(torch.sigmoid((r - D) / t), eps, 1.0 - eps)
 
     # Exact: sum over every i < j. The paper negatively samples this term
     # instead; we can afford the full O(N^2) sum at hypeGRL's graph sizes.
-    N = X.shape[0]
+    N = D.shape[0]
     mask = torch.triu(
-        torch.ones(N, N, dtype=torch.bool, device=X.device), diagonal=1
+        torch.ones(N, N, dtype=torch.bool, device=D.device), diagonal=1
     )
     nll = -(A[mask] * torch.log(P[mask])
             + (1.0 - A[mask]) * torch.log(1.0 - P[mask]))
@@ -381,12 +429,18 @@ class PoincareEmbeddingsEmbedder(HyperbolicEmbedder):
         device: str = "cpu",
         init_scale: float = 1e-4,     # reference-code default (paper uses 1e-3)
         random_state: Optional[int] = None,
+        representation: str = "ball",
     ):
         if loss not in ("ranking", "fermi_dirac"):
             raise ValueError(
                 f"loss must be 'ranking' or 'fermi_dirac', got {loss!r}."
             )
+        if representation not in _REPRESENTATIONS:
+            raise ValueError(
+                f"representation must be one of {sorted(_REPRESENTATIONS)}; "
+                f"got {representation!r}.")
 
+        self.representation       = representation
         self.d                    = d
         self.loss                 = loss
         self.n_negatives          = n_negatives
@@ -406,12 +460,13 @@ class PoincareEmbeddingsEmbedder(HyperbolicEmbedder):
         self.random_state         = random_state
 
         self._X: Optional[np.ndarray]               = None
+        self._rep = None                            # fitted Representation
         self._a_omega: Optional[np.ndarray]         = None
         self._loss_history: Optional[list[float]]   = None
         self._unknown_edges: list[tuple[int, int]]  = []
         self._G: Optional[nx.Graph]                 = None
 
-        # Burn-in state, read by ``distance`` during the burn-in phase.
+        # Burn-in state, read by the loss during the burn-in phase.
         self._burnin_active: bool                   = False
         self._neg_weights: Optional[torch.Tensor]   = None
 
@@ -467,33 +522,40 @@ class PoincareEmbeddingsEmbedder(HyperbolicEmbedder):
             dtype=torch.float64, device=torch.device(self.device),
         )
 
+        # One representation, optimised in place across both phases (the main
+        # phase continues from the burn-in-settled layout). The loss pulls
+        # rep.dist(), so it is chart-agnostic; embeddings() reads the ball image.
+        rep = build_representation(
+            _REPRESENTATIONS[self.representation], X_init,
+            input_chart="ball", device=self.device,
+        )
         loss_history: list[float] = []
-        X_cur, a_cur = X_init, a_omega_init
+        a_cur = a_omega_init
 
         # ── Burn-in phase: reduced lr + degree-dampened sampling ─────────────
         if self.burnin > 0:
             self._burnin_active = True
             try:
                 res_b = self._optimize_phase(
-                    G, unknown_edges, X_cur, a_cur,
+                    G, unknown_edges, rep, a_cur,
                     lr_X=self.lr_X * self.burnin_lr_multiplier,
                     lr_a=self.lr_a * self.burnin_lr_multiplier,
                     n_steps=self.burnin,
                 )
             finally:
                 self._burnin_active = False
-            X_cur = res_b["X"]
             a_cur = res_b["a_omega"] if unknown_edges else None
             loss_history += res_b["loss_history"]
 
         # ── Main phase: full lr + uniform sampling ───────────────────────────
         result = self._optimize_phase(
-            G, unknown_edges, X_cur, a_cur,
+            G, unknown_edges, rep, a_cur,
             lr_X=self.lr_X, lr_a=self.lr_a, n_steps=self.n_steps,
         )
         loss_history += result["loss_history"]
 
-        self._X             = result["X"]
+        self._X             = rep.to_ball().detach().cpu().numpy()
+        self._rep           = rep
         self._a_omega       = result["a_omega"]
         self._loss_history  = loss_history
         self._unknown_edges = unknown_edges
@@ -501,42 +563,53 @@ class PoincareEmbeddingsEmbedder(HyperbolicEmbedder):
         self._nodes         = list(G.nodes())  # rows follow G.nodes() (no reorder)
         return self
 
+    def _loss_from_dist(self, D: torch.Tensor, A: torch.Tensor) -> torch.Tensor:
+        """The selected loss, evaluated from a pairwise-distance matrix ``D``."""
+        if self.loss == "ranking":
+            # Degree-dampened negatives only while burning in; uniform otherwise.
+            weights = self._neg_weights if self._burnin_active else None
+            return ranking_nll_from_dist(
+                D, A, self.n_negatives, node_weights=weights
+            )
+        return fermi_dirac_nll_from_dist(D, A, self.r, self.t)
+
     def _optimize_phase(
         self,
         G: nx.Graph,
         unknown_edges: list[tuple[int, int]],
-        X_init: np.ndarray,
+        rep,
         a_omega_init: Optional[np.ndarray],
         lr_X: float,
         lr_a: float,
         n_steps: int,
     ) -> dict:
         """
-        Run one optimisation phase, dispatching to the fixed-graph or
-        joint (unknown-edge) optimiser. Returns a dict with ``X``,
+        Run one optimisation phase on ``rep`` (in place), dispatching to the
+        fixed-graph or joint (unknown-edge) optimiser. Returns a dict with
         ``a_omega`` and ``loss_history``.
         """
+        def loss_fn(rep_, A_t: torch.Tensor) -> torch.Tensor:
+            return self._loss_from_dist(rep_.dist(), A_t)
+
         if not unknown_edges:
             # Fixed graph: structural similarity is the (constant) adjacency.
             result = riemannian_optimize(
-                X_init    = X_init,
-                s_A       = self.structural_similarity(G),
-                loss_fn   = self.distance,
-                manifold  = POINCARE_BALL,
-                lr        = lr_X,
-                n_steps   = n_steps,
-                grad_clip = self.grad_clip,
-                log_every = self.log_every,
-                device    = self.device,
+                representation = rep,
+                s_A            = self.structural_similarity(G),
+                loss_fn        = loss_fn,
+                lr             = lr_X,
+                n_steps        = n_steps,
+                grad_clip      = self.grad_clip,
+                log_every      = self.log_every,
+                device         = self.device,
             )
             result["a_omega"] = np.array([])
             return result
 
         return joint_optimize(
             G             = G,
-            loss_fn       = self.distance,
-            X_init        = X_init,
-            manifold      = POINCARE_BALL,
+            representation = rep,
+            loss_fn       = loss_fn,
             unknown_edges = unknown_edges,
             a_omega_init  = a_omega_init,
             lr_X          = lr_X,
@@ -548,29 +621,6 @@ class PoincareEmbeddingsEmbedder(HyperbolicEmbedder):
             device        = self.device,
             verbose       = self.log_every > 0,
         )
-
-    def distance(self, X: torch.Tensor, A: torch.Tensor) -> torch.Tensor:
-        """
-        Encoder-decoder loss selected by ``self.loss``.
-
-        Parameters
-        ----------
-        X : torch.Tensor
-            ``(N, d)`` embeddings on the Poincaré ball.
-        A : torch.Tensor
-            ``(N, N)`` adjacency matrix (may contain imputed unknown entries).
-
-        Returns
-        -------
-        Scalar loss tensor.
-        """
-        if self.loss == "ranking":
-            # Degree-dampened negatives only while burning in; uniform otherwise.
-            weights = self._neg_weights if self._burnin_active else None
-            return ranking_nll(
-                X, A, self.n_negatives, POINCARE_BALL, node_weights=weights
-            )
-        return fermi_dirac_nll(X, A, self.r, self.t, POINCARE_BALL)
 
     def embeddings(self) -> np.ndarray:
         """
@@ -595,9 +645,9 @@ class PoincareEmbeddingsEmbedder(HyperbolicEmbedder):
         """
         return nx.to_numpy_array(G, dtype=np.float64)
 
-    def decode(self, X: np.ndarray) -> np.ndarray:
+    def decode(self, X) -> np.ndarray:
         """
-        Decoder output induced by embeddings ``X``.
+        Decoder output induced by an embedding.
 
         For ``loss="ranking"`` this is the pairwise hyperbolic distance
         matrix; for ``loss="fermi_dirac"`` it is the matrix of Fermi-Dirac
@@ -606,16 +656,22 @@ class PoincareEmbeddingsEmbedder(HyperbolicEmbedder):
         Parameters
         ----------
         X:
-            ``(N, d)`` Poincaré ball embeddings.
+            ``(N, d)`` Poincaré-ball coordinates, or a fitted
+            :class:`~hypegrl.representations.Representation` (whose exact
+            ``rep.dist()`` is used, avoiding ball saturation).
 
         Returns
         -------
         ``(N, N)`` NumPy array.
         """
-        X_t = torch.tensor(X, dtype=torch.float64)
+        if hasattr(X, "dist"):
+            D = X.dist().detach()
+        else:
+            X_t = torch.as_tensor(X, dtype=torch.float64)
+            D = poincare_distance_matrix(X_t)
         if self.loss == "ranking":
-            return poincare_distance_matrix(X_t).detach().numpy()
-        return fermi_dirac_decoder(X_t, self.r, self.t).detach().numpy()
+            return D.detach().cpu().numpy()
+        return torch.sigmoid((self.r - D) / self.t).detach().cpu().numpy()
 
     # ------------------------------------------------------------------
     # Capability flags

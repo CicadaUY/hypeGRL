@@ -739,7 +739,11 @@ def test_poincare_maps_x_init_equivalent_to_default(small_graph):
     emb2.fit(small_graph, X_init=X_init)
     X_explicit = emb2.embeddings()
 
-    np.testing.assert_array_equal(X_full, X_explicit)
+    # Equal up to the chart round-trip: embeddings() reads ball coordinates back
+    # through the (polar) representation, so a warm start captured as ball
+    # coordinates reproduces the default to float64 round-trip precision rather
+    # than byte-exactly. (A representation warm start avoids even this.)
+    np.testing.assert_allclose(X_full, X_explicit, atol=1e-9)
 
 
 def test_hydra_plus_x_init_equivalent_to_default(small_graph):
@@ -766,7 +770,11 @@ def test_hydra_plus_x_init_equivalent_to_default(small_graph):
     emb2.fit(small_graph, X_init=X_init)
     X_explicit = emb2.embeddings()
 
-    np.testing.assert_array_equal(X_full, X_explicit)
+    # Equal up to the chart round-trip: embeddings() reads ball coordinates back
+    # through the (polar) representation, so a warm start captured as ball
+    # coordinates reproduces the default to float64 round-trip precision rather
+    # than byte-exactly. (A representation warm start avoids even this.)
+    np.testing.assert_allclose(X_full, X_explicit, atol=1e-9)
 
 
 def test_hypermap_x_init_equivalent_to_default(karate):

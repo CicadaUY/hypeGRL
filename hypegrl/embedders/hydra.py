@@ -37,7 +37,6 @@ from typing import Optional
 
 import networkx as nx
 import numpy as np
-import torch
 from scipy.linalg import eigh
 from scipy.optimize import minimize_scalar
 
@@ -403,17 +402,21 @@ class HydraEmbedder(HyperbolicEmbedder):
         """
         return self._shortest_path_matrix(G)
 
-    def decode(self, X: np.ndarray) -> np.ndarray:
+    def decode(self, X) -> np.ndarray:
         """
-        Reconstruct the pairwise hyperbolic distance matrix from embeddings.
+        Reconstruct the pairwise hyperbolic distance matrix from an embedding.
 
         ``Dec(X)_{ij} = d_H(x_i, x_j)``  in the Poincaré model.
 
         Parameters
         ----------
         X:
-            ``(N, dim)`` Cartesian Poincaré coordinates (i.e. the output
-            of :meth:`embeddings`).
+            ``(N, dim)`` Cartesian Poincaré coordinates (i.e. the output of
+            :meth:`embeddings`), or a fitted
+            :class:`~hypegrl.representations.Representation`. Because the HYDRA
+            decoder is curvature-aware and coordinate-based, a representation is
+            coerced to ball coordinates first (``to_ball()``) — i.e.
+            ``decode(rep)`` equals ``decode(embeddings())``.
 
         Returns
         -------
@@ -426,50 +429,10 @@ class HydraEmbedder(HyperbolicEmbedder):
         """
         if self._curvature_fitted is None:
             raise RuntimeError("Call fit() or fit_distance() before decode().")
+        if hasattr(X, "to_ball"):
+            X = X.to_ball().detach().cpu().numpy()
         r, directional = _poincare_cartesian_to_polar(X)
         return poincare_distances_polar(r, directional, self._curvature_fitted)
-
-    def distance(self, X: torch.Tensor, A: torch.Tensor) -> torch.Tensor:
-        """
-        Stress loss: RMS error between decoded and structural distances.
-
-        .. math::
-
-            \\mathcal{L} = \\sqrt{\\sum_{i < j}
-                (\\hat{d}_{ij} - D_{ij})^2}
-
-        Although HYDRA does not use gradient-based optimisation, this
-        method is required by the :class:`~hypegrl.embedders.base.HyperbolicEmbedder`
-        interface and may be used for evaluation.
-
-        Parameters
-        ----------
-        X:
-            ``(N, dim)`` Poincaré embeddings as a torch tensor.
-        A:
-            ``(N, N)`` adjacency matrix as a torch tensor. Shortest-path
-            distances are recomputed internally via NetworkX using the
-            stored graph.
-
-        Returns
-        -------
-        Scalar torch tensor containing the stress.
-
-        Raises
-        ------
-        RuntimeError
-            If called before :meth:`fit`.
-        """
-        if self._G is None or self._curvature_fitted is None:
-            raise RuntimeError("Call fit() before distance().")
-
-        X_np = X.detach().cpu().numpy()
-        D    = self._shortest_path_matrix(self._G)
-        D_hat = self.decode(X_np)
-
-        mask = np.triu(np.ones_like(D, dtype=bool), k=1)
-        stress = float(np.sqrt(np.sum((D_hat[mask] - D[mask]) ** 2)))
-        return torch.tensor(stress, dtype=X.dtype, device=X.device)
 
     # ------------------------------------------------------------------
     # Capability flags

@@ -25,7 +25,6 @@ from __future__ import annotations
 import warnings
 from typing import Optional
 
-import geoopt
 import networkx as nx
 import numpy as np
 import torch
@@ -34,6 +33,21 @@ from hypegrl.embedders.base import HyperbolicEmbedder
 from hypegrl.manifolds.poincare import POINCARE_BALL
 from hypegrl.inference.joint_optimizer import joint_optimize
 from hypegrl.inference.riemannian_optimizer import riemannian_optimize
+from hypegrl.representations import (
+    BallRepresentation,
+    HyperboloidRepresentation,
+    PolarRepresentation,
+    build_representation,
+)
+
+# Chart in which the refinement runs. Poincaré Maps' geometry is chart-neutral
+# (the loss is a function of the pairwise distance only), so polar is the
+# default — it is exact at all radii, where the ball saturates past r≈12.
+_REPRESENTATIONS = {
+    "polar": PolarRepresentation,
+    "ball": BallRepresentation,
+    "hyperboloid": HyperboloidRepresentation,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -98,21 +112,25 @@ def soft_decoder(X: torch.Tensor, gamma: float = 1.0) -> torch.Tensor:
 # Loss
 # ---------------------------------------------------------------------------
 
-def symkl_loss_fixed_q(
-    X: torch.Tensor,
+def symkl_loss_from_dist(
+    D: torch.Tensor,
     Q: torch.Tensor,
     gamma: float = 1.0,
     eps: float = 1e-12,
 ) -> torch.Tensor:
     """
-    Symmetric KL divergence loss given a precomputed forest matrix ``Q``.
+    Symmetric KL divergence loss from a pairwise-distance matrix ``D``.
 
         \\mathcal{L} = \\sum_i \\mathrm{SymKL}(\\hat{A}_i,\\, Q_i)
 
+    The soft-min decoder ``A_hat = softmax_j(-D/gamma)`` is a function of the
+    pairwise hyperbolic distances only, so it can be fed ``rep.dist()`` from any
+    chart — this is the loss the embedder minimises via the joint optimiser.
+
     Parameters
     ----------
-    X:
-        ``(N, d)`` embeddings on the Poincare disk.
+    D:
+        ``(N, N)`` pairwise hyperbolic distance matrix.
     Q:
         ``(N, N)`` forest matrix ``(I + L)^{-1}``, precomputed by the caller.
     gamma:
@@ -124,42 +142,11 @@ def symkl_loss_fixed_q(
     -------
     Scalar loss tensor.
     """
-    A_hat = soft_decoder(X, gamma)
-    A_hat = torch.clamp(A_hat, min=eps)
-    Q     = torch.clamp(Q,     min=eps)
+    A_hat = torch.clamp(torch.softmax(-D / gamma, dim=1), min=eps)
+    Q     = torch.clamp(Q, min=eps)
     return (A_hat * (A_hat / Q).log() + Q * (Q / A_hat).log()).sum()
 
 
-def symkl_loss_fn(
-    X: torch.Tensor,
-    A: torch.Tensor,
-    gamma: float = 1.0,
-    eps: float = 1e-12,
-) -> torch.Tensor:
-    """
-    Symmetric KL divergence loss for Poincare Maps.
-
-    Computes ``Q = forest_matrix(A)`` then delegates to
-    ``symkl_loss_fixed_q``. Use this when ``A`` varies across steps (joint
-    optimisation with unknown edges). When ``A`` is fixed, prefer
-    precomputing ``Q`` once and calling ``symkl_loss_fixed_q`` directly.
-
-    Parameters
-    ----------
-    X:
-        ``(N, d)`` embeddings on the Poincare disk.
-    A:
-        ``(N, N)`` adjacency matrix (may contain imputed unknown entries).
-    gamma:
-        Decoder temperature.
-    eps:
-        Numerical floor for log arguments.
-
-    Returns
-    -------
-    Scalar loss tensor.
-    """
-    return symkl_loss_fixed_q(X, forest_matrix(A), gamma, eps)
 
 
 # ---------------------------------------------------------------------------
@@ -219,23 +206,30 @@ class PoincareMapsEmbedder(HyperbolicEmbedder):
         log_every: int = 50,
         device: str = "cpu",
         random_state: Optional[int] = None,
+        representation: str = "polar",
     ):
-        self.d            = d
-        self.gamma        = gamma
-        self.lr_X         = lr_X
-        self.lr_a         = lr_a
-        self.n_steps      = n_steps
-        self.regularize_a = regularize_a
-        self.grad_clip    = grad_clip
-        self.log_every    = log_every
-        self.device       = device
-        self.random_state = random_state
+        if representation not in _REPRESENTATIONS:
+            raise ValueError(
+                f"representation must be one of {sorted(_REPRESENTATIONS)}; "
+                f"got {representation!r}.")
+        self.d              = d
+        self.gamma          = gamma
+        self.lr_X           = lr_X
+        self.lr_a           = lr_a
+        self.n_steps        = n_steps
+        self.regularize_a   = regularize_a
+        self.grad_clip      = grad_clip
+        self.log_every      = log_every
+        self.device         = device
+        self.random_state   = random_state
+        self.representation = representation
 
         self._X: Optional[np.ndarray]               = None
         self._a_omega: Optional[np.ndarray]         = None
         self._loss_history: Optional[list[float]]   = None
         self._unknown_edges: list[tuple[int, int]]  = []
         self._G: Optional[nx.Graph]                 = None
+        self._rep = None                            # fitted Representation
 
     # ------------------------------------------------------------------
     # HyperbolicEmbedder interface
@@ -280,6 +274,15 @@ class PoincareMapsEmbedder(HyperbolicEmbedder):
         if X_init is None:
             X_init = np.random.randn(N, self.d) * 0.1
 
+        # Build the representation (chosen chart) from the ball warm start (or an
+        # incoming Representation of any chart). The loss pulls rep.dist(), so it
+        # is chart-agnostic; embeddings() reads back the ball projection.
+        rep = build_representation(
+            _REPRESENTATIONS[self.representation], X_init,
+            input_chart="ball", device=self.device,
+        )
+        gamma = self.gamma
+
         if not unknown_edges:
             # Fixed graph: precompute Q = (I+L)^{-1} once and hold it constant.
             A_t = torch.tensor(
@@ -287,29 +290,29 @@ class PoincareMapsEmbedder(HyperbolicEmbedder):
             )
             Q = forest_matrix(A_t).numpy()
 
-            gamma = self.gamma
-            def loss_fn(X: torch.Tensor, Q_t: torch.Tensor) -> torch.Tensor:
-                return symkl_loss_fixed_q(X, Q_t, gamma)
+            def loss_fn(rep_, Q_t: torch.Tensor) -> torch.Tensor:
+                return symkl_loss_from_dist(rep_.dist(), Q_t, gamma)
 
             result = riemannian_optimize(
-                X_init    = X_init,
-                s_A       = Q,
-                loss_fn   = loss_fn,
-                manifold  = POINCARE_BALL,
-                lr        = self.lr_X,
-                n_steps   = self.n_steps,
-                grad_clip = self.grad_clip,
-                log_every = self.log_every,
-                device    = self.device,
+                representation = rep,
+                s_A            = Q,
+                loss_fn        = loss_fn,
+                lr             = self.lr_X,
+                n_steps        = self.n_steps,
+                grad_clip      = self.grad_clip,
+                log_every      = self.log_every,
+                device         = self.device,
             )
             self._a_omega = np.array([])
 
         else:
+            def loss_fn(rep_, A_t: torch.Tensor) -> torch.Tensor:
+                return symkl_loss_from_dist(rep_.dist(), forest_matrix(A_t), gamma)
+
             result = joint_optimize(
                 G             = G,
-                loss_fn       = self.distance,
-                X_init        = X_init,
-                manifold      = POINCARE_BALL,
+                representation = rep,
+                loss_fn       = loss_fn,
                 unknown_edges = unknown_edges,
                 a_omega_init  = a_omega_init,
                 lr_X          = self.lr_X,
@@ -323,33 +326,13 @@ class PoincareMapsEmbedder(HyperbolicEmbedder):
             )
             self._a_omega = result["a_omega"]
 
-        self._X             = result["X"]
+        self._X             = rep.to_ball().detach().cpu().numpy()
+        self._rep           = rep
         self._loss_history  = result["loss_history"]
         self._unknown_edges = unknown_edges
         self._G             = G
         self._nodes         = list(G.nodes())  # rows follow G.nodes() (no reorder)
         return self
-
-    def distance(self, X: torch.Tensor, A: torch.Tensor) -> torch.Tensor:
-        """
-        Symmetric KL divergence loss for Poincare Maps.
-
-            \\mathcal{L} = \\sum_i \\mathrm{SymKL}(\\hat{A}_i,\\, Q_i)
-
-        Parameters
-        ----------
-        X : torch.Tensor
-            (N,d) Tensor with the embeddings.
-        A : torch.Tensor
-            (N,N) Tensor adjacency matrix.
-
-        Returns
-        -------
-        torch.Tensor
-            Scalar loss tensor.
-
-        """
-        return symkl_loss_fn(X, A, self.gamma)
 
     def embeddings(self) -> np.ndarray:
         """
@@ -382,21 +365,27 @@ class PoincareMapsEmbedder(HyperbolicEmbedder):
         )
         return forest_matrix(A).numpy()
 
-    def decode(self, X: np.ndarray) -> np.ndarray:
+    def decode(self, X) -> np.ndarray:
         """
-        Compute the soft-min decoder matrix ``A_hat`` from embeddings ``X``.
+        Compute the soft-min decoder matrix ``A_hat`` from an embedding.
 
         Parameters
         ----------
         X:
-            ``(N, d)`` embedding matrix on the Poincare disk.
+            ``(N, d)`` Poincaré-ball coordinates, or a fitted
+            :class:`~hypegrl.representations.Representation` (whose exact
+            ``rep.dist()`` is used, avoiding ball saturation).
 
         Returns
         -------
         ``(N, N)`` row-stochastic NumPy array.
         """
-        X_t = torch.tensor(X, dtype=torch.float64)
-        return soft_decoder(X_t, self.gamma).detach().numpy()
+        if hasattr(X, "dist"):
+            D = X.dist().detach()
+        else:
+            X_t = torch.as_tensor(X, dtype=torch.float64)
+            D = POINCARE_BALL.dist(X_t.unsqueeze(1), X_t.unsqueeze(0))
+        return torch.softmax(-D / self.gamma, dim=1).detach().cpu().numpy()
 
     # ------------------------------------------------------------------
     # Capability flags

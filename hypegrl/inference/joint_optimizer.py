@@ -15,7 +15,6 @@ for well-posedness when ``|Omega|`` is large or the graph is tree-like.
 
 from __future__ import annotations
 
-import warnings
 from typing import Callable, Optional
 
 import geoopt
@@ -119,9 +118,8 @@ def logit_init(values: np.ndarray, eps: float = 1e-6) -> np.ndarray:
 
 def joint_optimize(
     G: nx.Graph,
-    loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
-    X_init: np.ndarray,
-    manifold: geoopt.Manifold,
+    representation,
+    loss_fn: Callable,
     unknown_edges: Optional[list[tuple[int, int]]] = None,
     a_omega_init: Optional[np.ndarray] = None,
     lr_X: float = 1e-2,
@@ -134,34 +132,37 @@ def joint_optimize(
     verbose: bool = True,
 ) -> dict:
     """
-    Jointly optimise node embeddings ``X`` and unknown adjacency entries
-    ``a_Omega`` by minimising ``loss_fn(A_hat, s_A)`` over both.
+    Jointly optimise an embedding ``representation`` and unknown adjacency
+    entries ``a_Omega`` by minimising ``loss_fn(representation, A)`` over both.
+
+    Like :func:`~hypegrl.inference.riemannian_optimizer.riemannian_optimize` but
+    the target ``A`` is *rebuilt every step* from the current ``a_Omega`` estimate
+    rather than held fixed — this is what lets gradients reach the unknown edge
+    weights. The loss receives the **representation** (the decoder pulls
+    ``rep.dist()`` or whatever it needs) and the current adjacency ``A``.
 
     Parameters
     ----------
     G:
         Input graph. Edge weights are used when present; unknown edges
         are zeroed out before optimisation.
+    representation:
+        A :class:`hypegrl.representations.Representation`. Its ``parameters()``
+        are optimised jointly with ``a_Omega``; optimised in place.
     loss_fn:
-        Callable ``(A_hat, s_A) -> scalar tensor`` computing the
-        encoder-decoder loss. ``A_hat`` is the decoder output and ``s_A``
-        is the structural similarity matrix. Both are ``(N, N)`` tensors.
-        The embedder is responsible for providing this function.
-    X_init:
-        ``(N, d)`` initial embeddings. Must already lie on ``manifold``
-        (e.g. inside the Poincaré disk).
-    manifold:
-        A ``geoopt.Manifold`` instance defining the embedding geometry.
-        Used to wrap ``X`` as a ``ManifoldParameter`` for ``RiemannianAdam``.
+        Callable ``(rep: Representation, A: Tensor) -> scalar`` computing the
+        encoder-decoder loss. ``A`` is the ``(N, N)`` adjacency with the current
+        ``a_Omega`` estimate filled in. The embedder provides this function.
     unknown_edges:
         List of ``(m, n)`` tuples for edges whose weights are unknown.
         If ``None`` or empty, no unknown entries are optimised and the
-        problem reduces to standard embedding.
+        problem reduces to standard embedding (``A`` is constant).
     a_omega_init:
         Initial values for unknown edge weights, in ``(0, 1)``.
-        Defaults to ``0.5`` for all unknown edges.
+        Defaults to the row/column-mean heuristic.
     lr_X:
-        Learning rate for the Riemannian Adam update on ``X``.
+        Learning rate for the Riemannian Adam update on the representation's
+        parameters.
     lr_a:
         Learning rate for the Euclidean Adam update on ``a_omega_raw``.
     n_steps:
@@ -185,14 +186,13 @@ def joint_optimize(
     -------
     dict with keys:
 
-    - ``X``: ``(N, d)`` NumPy array of final embeddings.
+    - ``representation``: the same object, optimised in place.
     - ``a_omega``: ``(|Omega|,)`` NumPy array of imputed edge weights.
     - ``loss_history``: list of scalar loss values, one per step.
     - ``unknown_edges``: the input ``unknown_edges`` list (for reference).
     """
     device_ = torch.device(device)
     unknown_edges = unknown_edges or []
-    N, d = X_init.shape
 
     # ── Adjacency ────────────────────────────────────────────────────────
     A_known = graph_to_tensor(G, unknown_edges, device_)
@@ -200,7 +200,6 @@ def joint_optimize(
     # ── Unknown edge weights (sigmoid reparametrisation) ─────────────────
     if len(unknown_edges) > 0:
         if a_omega_init is None:
-            # a_omega_init = np.full(len(unknown_edges), 0.5)
             a_omega_init = imputation.compute_a_omega_init(G, unknown_edges)
         a_omega_raw = torch.tensor(
             logit_init(a_omega_init),
@@ -209,17 +208,16 @@ def joint_optimize(
     else:
         a_omega_raw = None
 
-    # ── Embeddings (ManifoldParameter for RiemannianAdam) ────────────────
-    X = geoopt.ManifoldParameter(
-        torch.tensor(X_init, dtype=torch.float64, device=device_),
-        manifold=manifold,
-    )
-
-    # ── Optimiser ────────────────────────────────────────────────────────
-    param_groups = [{"params": X, "lr": lr_X}]
+    # ── Optimiser (representation parameters + unknown weights) ───────────
+    embed_params = representation.parameters()
+    param_groups = [{"params": embed_params, "lr": lr_X}]
     if a_omega_raw is not None:
-        param_groups.append({"params": a_omega_raw, "lr": lr_a})
+        param_groups.append({"params": [a_omega_raw], "lr": lr_a})
     optimizer = geoopt.optim.RiemannianAdam(param_groups)
+
+    clip_params = list(embed_params) + (
+        [a_omega_raw] if a_omega_raw is not None else []
+    )
 
     # ── Training loop ────────────────────────────────────────────────────
     loss_history: list[float] = []
@@ -235,8 +233,8 @@ def joint_optimize(
             a_omega = torch.zeros(0, dtype=torch.float64, device=device_)
             A = A_known
 
-        # Evaluate loss (embedder-provided)
-        loss = loss_fn(X, A)
+        # Evaluate loss (embedder-provided; pulls what it needs from the rep)
+        loss = loss_fn(representation, A)
 
         # Optional L2 regularisation on unknown weights
         if regularize_a > 0.0 and a_omega_raw is not None:
@@ -246,8 +244,7 @@ def joint_optimize(
 
         # Gradient clipping
         if grad_clip > 0.0:
-            params_to_clip = [X] + ([a_omega_raw] if a_omega_raw is not None else [])
-            torch.nn.utils.clip_grad_norm_(params_to_clip, max_norm=grad_clip)
+            torch.nn.utils.clip_grad_norm_(clip_params, max_norm=grad_clip)
 
         optimizer.step()
 
@@ -268,7 +265,6 @@ def joint_optimize(
             print(f"Step {step:4d} | Loss: {loss_val:.6f} | a_Omega: {a_str}")
 
     # ── Extract results ───────────────────────────────────────────────────
-    X_final = X.detach().cpu().numpy()
     a_final = (
         torch.sigmoid(a_omega_raw).detach().cpu().numpy()
         if a_omega_raw is not None
@@ -276,8 +272,8 @@ def joint_optimize(
     )
 
     return {
-        "X":             X_final,
-        "a_omega":       a_final,
-        "loss_history":  loss_history,
-        "unknown_edges": unknown_edges,
+        "representation": representation,
+        "a_omega":        a_final,
+        "loss_history":   loss_history,
+        "unknown_edges":  unknown_edges,
     }

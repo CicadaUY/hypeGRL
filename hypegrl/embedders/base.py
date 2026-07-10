@@ -1,9 +1,8 @@
 """Abstract base class for all embedding methods."""
 from abc import ABC, abstractmethod
 from typing import Optional
-import numpy as np
 import networkx as nx
-import torch
+import numpy as np
 
 class HyperbolicEmbedder(ABC):
     """
@@ -46,10 +45,15 @@ class HyperbolicEmbedder(ABC):
             optimizer; non-gradient methods (e.g. Hydra) fall back to
             zero-imputation with a warning.
         X_init:
-            ``(N, d)`` initial embeddings for gradient-based methods.
-            If ``None``, each method uses its own default initialisation
-            (e.g. random for Poincaré Maps, greedy for HyperMap, HYDRA
-            spectral step for HYDRA+). Ignored by non-gradient methods.
+            Initial embeddings for gradient-based methods. Either an
+            ``(N, d)`` coordinate array in the method's native input chart
+            (Poincaré ball for most, hyperboloid for Lorentz Embeddings) or a
+            fitted :class:`~hypegrl.representations.Representation` (any chart —
+            re-charted into the method's optimisation chart via ``from_polar``,
+            so an exact large-radius warm start survives without ball
+            saturation). If ``None``, each method uses its own default
+            initialisation (e.g. random for Poincaré Maps, greedy for HyperMap,
+            HYDRA spectral step for HYDRA+). Ignored by non-gradient methods.
 
         Returns
         -------
@@ -59,10 +63,35 @@ class HyperbolicEmbedder(ABC):
     @abstractmethod
     def embeddings(self) -> np.ndarray:
         """
-        Return the current embeddings as an ``(N, d)`` NumPy array.
+        Return the current embeddings as an ``(N, d)`` **Poincaré-ball**
+        coordinate array. Must be called after :meth:`fit`.
 
-        Must be called after :meth:`fit`.
+        This is the library's interchange format (the disk plotters and
+        downstream code consume ball coordinates), but the ball chart *saturates*
+        past ``r ≈ 12`` (``tanh(r/2) → 1`` maps every large radius onto the
+        boundary), so for graphs whose geometry reaches large radii the leaf
+        nodes collapse to a common radius here. For the **exact, chart-agnostic**
+        geometry prefer :meth:`embeddings_representation`, which returns the
+        fitted :class:`~hypegrl.representations.Representation` and can be read
+        out in any chart via its ``to_polar`` / ``to_ball`` / ``to_hyperboloid``
+        methods without that loss.
         """
+
+    def embeddings_representation(self):
+        """
+        Return the fitted :class:`~hypegrl.representations.Representation` — the
+        chart the embedding was optimised in, holding the *exact* geometry.
+
+        Unlike :meth:`embeddings` (Poincaré-ball coordinates, which saturate past
+        ``r ≈ 12``), the representation preserves the full hyperbolic radius and
+        can be read out in any chart via its ``to_polar`` / ``to_ball`` /
+        ``to_hyperboloid`` methods. Rows follow :meth:`nodes` order.
+
+        Returns ``None`` before :meth:`fit`, and for non-gradient methods that do
+        not build a representation. Concrete gradient embedders record it in
+        ``self._rep`` during :meth:`fit`.
+        """
+        return getattr(self, "_rep", None)
 
     def nodes(self) -> Optional[list]:
         """
@@ -98,54 +127,26 @@ class HyperbolicEmbedder(ABC):
         """
 
     @abstractmethod
-    def decode(self, X: np.ndarray) -> np.ndarray:
+    def decode(self, X) -> np.ndarray:
         """
-        Compute ``Dec(X)``: the (dis)similarity matrix induced by embeddings.
+        Compute ``Dec(X)``: the (dis)similarity matrix induced by an embedding.
 
         Parameters
         ----------
         X:
-            ``(N, d)`` embedding matrix.
+            Either an ``(N, d)`` coordinate array (Poincaré ball, e.g. the output
+            of :meth:`embeddings`) or a fitted
+            :class:`~hypegrl.representations.Representation` (as returned by
+            :meth:`embeddings_representation`). Passing the representation decodes
+            the *exact* geometry — for distance-based decoders it uses
+            ``rep.dist()`` directly, avoiding the ball saturation that
+            coordinates suffer past ``r ≈ 12``.
 
         Returns
         -------
         (N, N) NumPy array.
         """
-    
-    # @abstractmethod
-    # def encode(self, G: nx.Graph) -> np.ndarray:
-    #     """
-    #     Compute ``Enc(A)``: the mapping from the adjacency matrix to the embeddings.
 
-    #     Parameters
-    #     ----------
-    #     G:
-    #         Input graph.
-
-    #     Returns
-    #     -------
-    #     (N, d) NumPy array.
-    
-    #     """
-    
-    @abstractmethod
-    def distance(self, X: torch.Tensor, A: torch.Tensor) -> torch.Tensor:
-        """
-        Computes the distance between structural_similarity(A) and decode(X). 
-        Will be used as the loss to be minimized.
-
-        Parameters
-        ----------
-        X : torch.Tensor
-            ``(N,d)`` tensor containing the embeddings.
-        A : torch.Tensor
-            ``(N,N)`` tensor of the full adjacency matrix.
-
-        Returns
-        -------
-        Loss evaluated at X and A.
-
-        """
     # ------------------------------------------------------------------
     # Streaming / re-inference
     # ------------------------------------------------------------------

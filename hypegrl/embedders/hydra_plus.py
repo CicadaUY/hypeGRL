@@ -34,7 +34,6 @@ from __future__ import annotations
 import warnings
 from typing import Optional
 
-import geoopt
 import networkx as nx
 import numpy as np
 import torch
@@ -42,34 +41,43 @@ import torch
 # Cleanly reuse the parent class and internal helper from hydra
 from hypegrl.embedders.hydra import HydraEmbedder, _poincare_cartesian_to_polar
 from hypegrl.inference.riemannian_optimizer import riemannian_optimize
+from hypegrl.representations import (
+    BallRepresentation,
+    HyperboloidRepresentation,
+    PolarRepresentation,
+    build_representation,
+)
+
+# Chart in which the Step-2 gradient refinement runs. HYDRA+'s stress loss is a
+# function of the pairwise distance only, so the chart is neutral — polar is the
+# default (exact at all radii; the ball saturates past r≈12), matching the other
+# neutral methods. The original HYDRA+ even refines on the hyperboloid; the ball
+# was only an implementation choice.
+_REPRESENTATIONS = {
+    "polar": PolarRepresentation,
+    "ball": BallRepresentation,
+    "hyperboloid": HyperboloidRepresentation,
+}
 
 
 # ---------------------------------------------------------------------------
 # Stress loss (differentiable, used during Riemannian optimisation)
 # ---------------------------------------------------------------------------
 
-def _stress_loss(
-    X: torch.Tensor,
+def _stress_loss_from_dist(
+    D_hat: torch.Tensor,
     D_scaled: torch.Tensor,
-    ball: geoopt.PoincareBall,
     mask: torch.Tensor,
 ) -> torch.Tensor:
     """
-    Differentiable stress loss on the unit Poincaré ball (c=1).
+    Differentiable stress from a pairwise-distance matrix ``D_hat`` (e.g.
+    ``rep.dist()``) against the target distances.
 
-    We always optimise on the **unit** ball (``ball`` has ``c=1``) so that
-    HYDRA's warm-start coordinates, which live in the unit disk, are valid
-    without any rescaling. The curvature ``k`` is absorbed into the target
-    distances: since ``d_k(x,y) = d_1(x,y) / sqrt(k)``, minimising
-
-        sum_{i<j} (d_1(x_i,x_j) - D_ij * sqrt(k))^2
-
-    is equivalent (up to the constant factor 1/k) to minimising the true
-    stress ``sum_{i<j} (d_k(x_i,x_j) - D_ij)^2``. ``D_scaled`` must
-    therefore be ``D * sqrt(k)``.
+    The curvature ``k`` is absorbed into the target distances: since
+    ``d_k(x,y) = d_1(x,y) / sqrt(k)`` and every chart here has unit curvature,
+    minimising ``sum_{i<j} (d_1 - D_ij*sqrt(k))^2`` is equivalent (up to the
+    constant ``1/k``) to the true stress. ``D_scaled`` must be ``D * sqrt(k)``.
     """
-    # geoopt broadcasts: dist(X[i], X[j]) over all pairs → (N, N)
-    D_hat = ball.dist(X.unsqueeze(1), X.unsqueeze(0))  # (N, N)
     return torch.sum((D_hat[mask] - D_scaled[mask]) ** 2)
 
 
@@ -102,6 +110,7 @@ class HydraPlusEmbedder(HydraEmbedder):
         log_every:    int            = 50,
         device:       str            = "cpu",
         random_state: Optional[int]  = None,
+        representation: str          = "polar",
     ):
         super().__init__(
             dim=dim,
@@ -110,13 +119,19 @@ class HydraPlusEmbedder(HydraEmbedder):
             equi_adj=equi_adj,
             weight=weight,
         )
-        self.lr           = lr
-        self.n_steps      = n_steps
-        self.grad_clip    = grad_clip
-        self.log_every    = log_every
-        self.device       = device
-        self.random_state = random_state
+        if representation not in _REPRESENTATIONS:
+            raise ValueError(
+                f"representation must be one of {sorted(_REPRESENTATIONS)}; "
+                f"got {representation!r}.")
+        self.lr             = lr
+        self.n_steps        = n_steps
+        self.grad_clip      = grad_clip
+        self.log_every      = log_every
+        self.device         = device
+        self.random_state   = random_state
+        self.representation = representation
 
+        self._rep = None                          # fitted Representation
         # Additional fitted state (refinement-specific)
         self._loss_history: Optional[list[float]] = None
         self._stress_init:  Optional[float]       = None  # HYDRA stress before refinement
@@ -175,33 +190,39 @@ class HydraPlusEmbedder(HydraEmbedder):
             X_warm = X_init
 
         # --- Step 2: Riemannian refinement (shared) -----------------------
-        ball  = geoopt.PoincareBall(c=1.0)
+        # Build the representation (chosen chart) from the ball warm start (or an
+        # incoming Representation of any chart). The stress loss pulls rep.dist()
+        # — unit curvature in every chart — so the sqrt(k) target scaling below is
+        # unchanged; embeddings() reads back the ball projection.
         n     = len(D)
         scale = float(np.sqrt(self._curvature_fitted))
-
-        X_proj = ball.projx(torch.tensor(X_warm, dtype=torch.float64)).numpy()
         s_A    = D * scale
         mask_t = torch.as_tensor(np.triu(np.ones((n, n), dtype=bool), k=1))
 
-        def loss_fn(X: torch.Tensor, s_A_t: torch.Tensor) -> torch.Tensor:
-            return _stress_loss(X, s_A_t, ball, mask_t.to(X.device))
+        rep = build_representation(
+            _REPRESENTATIONS[self.representation], X_warm,
+            input_chart="ball", device=self.device,
+        )
+
+        def loss_fn(rep_, s_A_t: torch.Tensor) -> torch.Tensor:
+            return _stress_loss_from_dist(rep_.dist(), s_A_t, mask_t.to(s_A_t.device))
 
         result = riemannian_optimize(
-            X_init    = X_proj,
-            s_A       = s_A,
-            loss_fn   = loss_fn,
-            manifold  = ball,
-            lr        = self.lr,
-            n_steps   = self.n_steps,
-            grad_clip = self.grad_clip,
-            log_every = self.log_every,
-            device    = self.device,
+            representation = rep,
+            s_A            = s_A,
+            loss_fn        = loss_fn,
+            lr             = self.lr,
+            n_steps        = self.n_steps,
+            grad_clip      = self.grad_clip,
+            log_every      = self.log_every,
+            device         = self.device,
         )
-        X_refined    = result["X"]
+        X_refined    = rep.to_ball().detach().cpu().numpy()
         loss_history = result["loss_history"]
 
         # --- Step 3: Update stored state ----------------------------------
         self._X            = X_refined
+        self._rep          = rep
         self._loss_history = loss_history
         self._D            = D
         self._G            = None
@@ -269,20 +290,6 @@ class HydraPlusEmbedder(HydraEmbedder):
         self._nodes = list(G.nodes())  # rows follow G.nodes() (no reorder)
 
         return self
-
-    def distance(self, X: torch.Tensor, A: torch.Tensor) -> torch.Tensor:
-        """Differentiable stress loss for HYDRA+."""
-        if self._D is None or self._curvature_fitted is None:
-            raise RuntimeError("Call fit() before distance().")
-
-        ball  = geoopt.PoincareBall(c=1.0)
-        scale = float(np.sqrt(self._curvature_fitted))
-        D_t   = torch.tensor(self._D * scale, dtype=X.dtype, device=X.device)
-        n     = X.shape[0]
-        mask  = torch.triu(
-            torch.ones(n, n, dtype=torch.bool, device=X.device), diagonal=1
-        )
-        return _stress_loss(X, D_t, ball, mask) / self._curvature_fitted
 
     # ------------------------------------------------------------------
     # Capability flags

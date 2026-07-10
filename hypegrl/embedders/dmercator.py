@@ -70,6 +70,7 @@ from hypegrl.representations import (
     BallRepresentation,
     HyperboloidRepresentation,
     PolarRepresentation,
+    build_representation,
 )
 
 # Chart in which the Fermi-Dirac refinement runs. Polar is the default because
@@ -107,17 +108,6 @@ def _fermi_dirac_nll(
     zz = z[mask]
     nll = -(a * F.logsigmoid(-zz) + (1.0 - a) * F.logsigmoid(zz))
     return nll.sum()
-
-
-def _fermi_dirac_nll_poincare(
-    X: torch.Tensor,
-    A_t: torch.Tensor,
-    half_beta: float,
-    R_hat: float,
-) -> torch.Tensor:
-    """Fermi-Dirac NLL for Poincaré ball points (pairwise hyperbolic distances)."""
-    dist = POINCARE_BALL.dist(X.unsqueeze(1), X.unsqueeze(0))  # (N, N)
-    return _fermi_dirac_nll(dist, A_t, half_beta, R_hat)
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +208,7 @@ class DMercatorEmbedder(HyperbolicEmbedder):
         self._R_hat: Optional[float] = None
         self._loss_history: Optional[list[float]] = None
         self._G: Optional[nx.Graph] = None
+        self._rep = None                               # fitted Representation
 
     # ------------------------------------------------------------------
     # HyperbolicEmbedder interface
@@ -298,8 +289,8 @@ class DMercatorEmbedder(HyperbolicEmbedder):
         # exact ball→polar map inside the representation.
         rep_cls = _REPRESENTATIONS[self.representation]
         if X_init is not None:
-            rep = rep_cls.from_ball(
-                np.asarray(X_init, dtype=np.float64), device=self.device)
+            rep = build_representation(
+                rep_cls, X_init, input_chart="ball", device=self.device)
         else:
             rep = rep_cls.from_polar(self._r, self._V, device=self.device)
 
@@ -334,6 +325,7 @@ class DMercatorEmbedder(HyperbolicEmbedder):
         self._V = V_ref.detach().cpu().numpy()
         self._kappa = self._kappa_min * np.exp((D / 2.0) * (R_hat - self._r))
         self._X = rep.to_ball().detach().cpu().numpy()
+        self._rep = rep
 
         return self
 
@@ -374,25 +366,29 @@ class DMercatorEmbedder(HyperbolicEmbedder):
         nodelist = self._nodes if self._nodes is not None else list(G.nodes())
         return nx.to_numpy_array(G, nodelist=nodelist, weight=None)
 
-    def decode(self, X: np.ndarray) -> np.ndarray:
+    def decode(self, X) -> np.ndarray:
         """
-        Fermi-Dirac connection probabilities from Poincaré ball embeddings:
+        Fermi-Dirac connection probabilities from an embedding:
 
             p_ij = 1 / (1 + e^{(β/2)(d_H(x_i,x_j) − R̂)})
+
+        Parameters
+        ----------
+        X:
+            ``(N, d)`` Poincaré-ball coordinates, or a fitted
+            :class:`~hypegrl.representations.Representation`. Passing the
+            representation uses the exact ``rep.dist()`` — important here, since
+            D-Mercator places leaves at large radius where the ball saturates.
         """
         if self._R_hat is None or self._beta_fitted is None:
             raise RuntimeError("Call fit() before decode().")
 
-        Xt = torch.as_tensor(X, dtype=torch.float64)
-        dist = POINCARE_BALL.dist(Xt.unsqueeze(1), Xt.unsqueeze(0)).numpy()
+        if hasattr(X, "dist"):
+            dist = X.dist().detach().cpu().numpy()
+        else:
+            Xt = torch.as_tensor(X, dtype=torch.float64)
+            dist = POINCARE_BALL.dist(Xt.unsqueeze(1), Xt.unsqueeze(0)).numpy()
         return expit(-(self._beta_fitted / 2.0) * (dist - self._R_hat))
-
-    def distance(self, X: torch.Tensor, A: torch.Tensor) -> torch.Tensor:
-        """Fermi-Dirac NLL on hyperbolic distances for Poincaré ball ``X``."""
-        if self._R_hat is None or self._beta_fitted is None:
-            raise RuntimeError("Call fit() before distance().")
-
-        return _fermi_dirac_nll_poincare(X, A, self._beta_fitted / 2.0, self._R_hat)
 
     # ------------------------------------------------------------------
     # Capability flags
