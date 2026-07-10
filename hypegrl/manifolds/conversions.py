@@ -40,6 +40,38 @@ hyperboloid_to_ball_torch = lorentz_to_poincare_torch
 
 
 # ---------------------------------------------------------------------------
+# Direction extraction with an origin guard
+# ---------------------------------------------------------------------------
+# The origin (``‖space‖ = 0``, i.e. ``r = 0``) has no defined direction. Left as
+# the zero vector it makes a downstream ``Sphere`` projection divide by zero
+# (``0/0 → NaN``), which poisons the whole distance matrix. Assign it the
+# canonical ``e_0 = (1, 0, …)``: harmless, because the angular term vanishes at
+# ``r = 0`` (``sinh r = 0``), so a point at the origin has the same distances to
+# every other point whatever its nominal direction. Methods that place a node at
+# the centre (e.g. HyperMap's root) rely on this.
+
+def _origin_safe_units(space: np.ndarray, norms: np.ndarray, eps: float) -> np.ndarray:
+    V = space / np.clip(norms[:, None], eps, None)
+    zero = norms == 0.0
+    if np.any(zero):
+        V[zero] = 0.0
+        V[zero, 0] = 1.0
+    return V
+
+
+def _origin_safe_units_torch(
+    space: torch.Tensor, norms: torch.Tensor, eps: float,
+) -> torch.Tensor:
+    V = space / norms.clamp_min(eps).unsqueeze(1)
+    zero = norms == 0.0
+    if zero.any():
+        V = V.clone()
+        V[zero] = 0.0
+        V[zero, 0] = 1.0
+    return V
+
+
+# ---------------------------------------------------------------------------
 # polar  <-->  Poincaré ball   (unit-vector form; direct)
 # ---------------------------------------------------------------------------
 
@@ -58,7 +90,7 @@ def ball_to_polar(X: np.ndarray, eps: float = 1e-12) -> tuple[np.ndarray, np.nda
     """``X → (r, v)`` with ``r = 2·artanh‖X‖``, ``v = X/‖X‖``."""
     norms = np.linalg.norm(X, axis=1)
     r = 2.0 * np.arctanh(np.clip(norms, 0.0, 1.0 - eps))
-    V = X / np.clip(norms[:, None], eps, None)
+    V = _origin_safe_units(X, norms, eps)
     return r, V
 
 
@@ -82,7 +114,7 @@ def ball_to_polar_torch(
     """Autograd-compatible :func:`ball_to_polar`."""
     norms = X.norm(dim=1)
     r = 2.0 * torch.arctanh(norms.clamp(0.0, 1.0 - eps))
-    V = X / norms.clamp_min(eps).unsqueeze(1)
+    V = _origin_safe_units_torch(X, norms, eps)
     return r, V
 
 
@@ -109,7 +141,7 @@ def hyperboloid_to_polar(
     xs = H[:, 1:]
     norms = np.linalg.norm(xs, axis=1)
     r = np.arcsinh(norms)
-    V = xs / np.clip(norms[:, None], eps, None)
+    V = _origin_safe_units(xs, norms, eps)
     return r, V
 
 
@@ -129,7 +161,7 @@ def hyperboloid_to_polar_torch(
     xs = H[:, 1:]
     norms = xs.norm(dim=1)
     r = torch.arcsinh(norms)
-    V = xs / norms.clamp_min(eps).unsqueeze(1)
+    V = _origin_safe_units_torch(xs, norms, eps)
     return r, V
 
 

@@ -128,3 +128,31 @@ def test_parameters_are_optimisable(rep_cls):
         opt.step()
     last = loss_fn().item()
     assert last < first, f"{rep_cls.__name__}: loss {first:.4f} -> {last:.4f}"
+
+
+# ---------------------------------------------------------------------------
+# Origin guard: a node at the centre (r = 0) has no defined direction
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("rep_cls", ALL_REPS)
+def test_dist_finite_with_node_at_origin(rep_cls):
+    """A node at the origin (``r = 0``) has an undefined direction; ``dist()``
+    must stay finite. Regression: HyperMap places its root at the centre, whose
+    zero direction made ``Sphere.projx`` return NaN and poisoned the whole
+    distance matrix. The direction is irrelevant there (``sinh 0 = 0``), so the
+    conversions assign the canonical ``e_0``.
+    """
+    X = np.array([
+        [0.0, 0.0, 0.0],      # origin — direction undefined
+        [0.30, 0.0, 0.0],
+        [0.0, -0.40, 0.10],
+        [0.20, 0.20, 0.20],
+    ])
+    rep = rep_cls.from_ball(X)
+    D = rep.dist().detach().numpy()
+    assert np.isfinite(D).all(), \
+        f"{rep_cls.__name__}.dist() not finite with a node at the origin"
+    # the origin's readout direction is a genuine unit vector (not zero/NaN)
+    r, v = rep.to_polar()
+    assert torch.isfinite(v).all()
+    assert torch.isclose(v.norm(dim=1), torch.ones(len(X))).all()
