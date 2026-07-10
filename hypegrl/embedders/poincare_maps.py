@@ -483,12 +483,17 @@ class PoincareMapsEmbedder(HyperbolicEmbedder):
                 if key not in {(min(m,n),max(m,n)) for m,n in new_unknown}:
                     new_unknown.append(key)
 
-        # Warm-start from current embeddings (extended if nodes added)
-        X_init = self._X
-        if added_nodes and X_init is not None:
-            n_new = len(added_nodes)
-            new_rows = np.random.randn(n_new, self.d) * 0.1
-            X_init = np.vstack([X_init, new_rows])
+        # Warm-start from the exact representation when the node set is
+        # unchanged (edge-only update); when nodes change we need coordinates to
+        # resize, so fall back to the ball image (extended for added nodes).
+        if added_nodes or removed_nodes:
+            X_init = self._X
+            if added_nodes:
+                n_new = len(added_nodes)
+                new_rows = np.random.randn(n_new, self.d) * 0.1
+                X_init = np.vstack([X_init, new_rows])
+        else:
+            X_init = self._rep
 
         return self.fit(G_new, unknown_edges=new_unknown, X_init=X_init)
 

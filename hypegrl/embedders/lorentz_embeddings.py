@@ -716,14 +716,20 @@ class LorentzEmbeddingsEmbedder(HyperbolicEmbedder):
                 if key not in known:
                     new_unknown.append(key)
 
-        X_init = self._X_hyper
-        if added_nodes and X_init is not None:
-            n_new = len(added_nodes)
-            xr = np.random.uniform(
-                -self.init_scale, self.init_scale, size=(n_new, self.d)
-            )
-            x0 = np.sqrt(1.0 + (xr ** 2).sum(axis=1, keepdims=True))
-            X_init = np.vstack([X_init, np.concatenate([x0, xr], axis=1)])
+        # Warm-start from the exact representation when the node set is
+        # unchanged; when nodes change we need hyperboloid coordinates to resize,
+        # so fall back to the hyperboloid image (extended for added nodes).
+        if added_nodes or removed_nodes:
+            X_init = self._X_hyper
+            if added_nodes:
+                n_new = len(added_nodes)
+                xr = np.random.uniform(
+                    -self.init_scale, self.init_scale, size=(n_new, self.d)
+                )
+                x0 = np.sqrt(1.0 + (xr ** 2).sum(axis=1, keepdims=True))
+                X_init = np.vstack([X_init, np.concatenate([x0, xr], axis=1)])
+        else:
+            X_init = self._rep
 
         return self.fit(G_new, unknown_edges=new_unknown, X_init=X_init)
 

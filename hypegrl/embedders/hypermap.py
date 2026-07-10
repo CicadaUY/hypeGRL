@@ -760,7 +760,10 @@ class HyperMapEmbedder(HyperbolicEmbedder):
                 if key not in known:
                     new_unknown.append(key)
 
-        return self.fit(G_new, unknown_edges=new_unknown, X_init=self._X)
+        # Warm-start from the exact representation for edge-only updates; when
+        # the node set changes, fall back to the ball image.
+        X_init = self._X if (added_nodes or removed_nodes) else self._rep
+        return self.fit(G_new, unknown_edges=new_unknown, X_init=X_init)
 
     # ------------------------------------------------------------------
     # Extra accessors
