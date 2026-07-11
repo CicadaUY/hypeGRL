@@ -2,6 +2,7 @@
 import networkx as nx
 import numpy as np
 import pytest
+import torch
 
 from hypegrl.evaluation import (
     LinkPredictionSplit,
@@ -14,6 +15,7 @@ from hypegrl.evaluation import (
     precision_recall_f1_at_k,
     training_graph,
 )
+from hypegrl.representations import BallRepresentation, PolarRepresentation
 
 
 @pytest.fixture
@@ -118,6 +120,17 @@ def test_direction_flag_flips_ranking():
     assert f1_at_k(_SCORES, is_pos, higher_is_link=True) == 0.0
 
 
+def test_ranking_rejects_nan_scores():
+    # A NaN score must raise, not be silently sorted last (which would mis-rank
+    # that candidate regardless of direction). Guards both entry points.
+    is_pos = np.array([True, False, False])
+    bad = np.array([0.1, np.nan, 0.3])
+    with pytest.raises(ValueError, match="NaN"):
+        f1_at_k(bad, is_pos, higher_is_link=False)
+    with pytest.raises(ValueError, match="NaN"):
+        lift_curve(bad, is_pos, higher_is_link=False)
+
+
 def test_lift_curve_first_bin_capture():
     curve = lift_curve(_SCORES, _POS_TOP, n_bins=2, higher_is_link=True)
     assert curve.bin_counts == [5, 5]
@@ -148,33 +161,52 @@ def test_candidate_scores_maps_pairs_through_node_order():
 
 
 def _two_poincare_clusters(seed=0, per_class=40):
-    """Two well-separated clusters in the Poincaré disk, opposite directions."""
+    """Two well-separated clusters in the Poincaré disk, opposite directions.
+
+    Returns a fitted ``BallRepresentation`` (the evaluation classifier consumes a
+    representation, not coordinates) plus the labels.
+    """
     rng = np.random.default_rng(seed)
     a = np.array([0.5, 0.0]) + 0.03 * rng.standard_normal((per_class, 2))
     b = np.array([-0.5, 0.0]) + 0.03 * rng.standard_normal((per_class, 2))
     X = np.vstack([a, b])
     y = np.array([0] * per_class + [1] * per_class)
-    return X, y
+    return BallRepresentation.from_ball(X), y
 
 
 def test_pairwise_distance_matrix_is_symmetric_zero_diag():
-    X, _ = _two_poincare_clusters()
-    D = pairwise_distance_matrix(X)
-    assert D.shape == (len(X), len(X))
+    rep, _ = _two_poincare_clusters()
+    D = pairwise_distance_matrix(rep)
+    N = rep.dist().shape[0]
+    assert D.shape == (N, N)
     assert np.allclose(D, D.T)
     assert np.allclose(np.diag(D), 0.0, atol=1e-9)
 
 
+def test_pairwise_distance_matrix_exact_at_large_radius():
+    """Regression: distances must stay exact where ball coordinates saturate.
+
+    Two collinear nodes at r=20 and r=25 are hyperbolic distance 5 apart. Reading
+    that off ``embeddings()`` ball coordinates (both saturate to ‖x‖≈1) would
+    collapse the gap toward 0; the representation's exact ``dist()`` must not.
+    """
+    r = torch.tensor([20.0, 25.0], dtype=torch.float64)
+    v = torch.tensor([[1.0, 0.0], [1.0, 0.0]], dtype=torch.float64)
+    rep = PolarRepresentation.from_polar(r, v)
+    D = pairwise_distance_matrix(rep)
+    assert np.isclose(D[0, 1], 5.0, atol=1e-6)
+
+
 def test_knn_separates_well_separated_clusters():
-    X, y = _two_poincare_clusters()
-    res = hyperbolic_knn_classification(X, y, k=5, seed=0)
+    rep, y = _two_poincare_clusters()
+    res = hyperbolic_knn_classification(rep, y, k=5, seed=0)
     assert res["accuracy"] == 1.0 and res["f1"] == 1.0
     assert res["n_classes"] == 2
     assert res["n_test"] == int(round(0.2 * len(y)))
 
 
 def test_knn_is_deterministic_under_seed():
-    X, y = _two_poincare_clusters()
-    a = hyperbolic_knn_classification(X, y, k=3, seed=7)
-    b = hyperbolic_knn_classification(X, y, k=3, seed=7)
+    rep, y = _two_poincare_clusters()
+    a = hyperbolic_knn_classification(rep, y, k=3, seed=7)
+    b = hyperbolic_knn_classification(rep, y, k=3, seed=7)
     assert a == b

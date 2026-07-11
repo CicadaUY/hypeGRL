@@ -2,53 +2,54 @@
 
 Probes how well an embedding organises node labels geometrically: a k-nearest
 -neighbour classifier under the embedding's own geodesic distance, with no
-learned classifier on top. The manifold distance is computed once via
-``manifold.dist`` (the library idiom) and fed to scikit-learn as a precomputed
-matrix; the classifier and metrics are scikit-learn's.
+learned classifier on top. The distance comes from the fitted
+:class:`~hypegrl.representations.Representation`'s exact ``dist()`` — the
+chart-agnostic geometry — fed to scikit-learn as a precomputed matrix; the
+classifier and metrics are scikit-learn's.
+
+These functions take a ``Representation``, **not** ball coordinates, on purpose:
+``embeddings()`` returns Poincaré-ball coordinates, which *saturate* past
+``r ≈ 12`` (``tanh(r/2) → 1`` maps every large radius onto the boundary). Distances
+recomputed from those coordinates are silently wrong for large-radius embeddings —
+losing radial resolution and, far enough out, scrambling the very nearest-neighbour
+ordering this classifier depends on — with no error raised. The representation
+preserves the exact radius, so pass ``embedder.embeddings_representation()``.
 """
 from typing import Optional
 
-import geoopt
 import numpy as np
-import torch
 from sklearn.metrics import accuracy_score, f1_score
 from sklearn.model_selection import train_test_split
 from sklearn.neighbors import KNeighborsClassifier
 
-from hypegrl.manifolds.poincare import POINCARE_BALL
+from hypegrl.representations import Representation
 
 
-def pairwise_distance_matrix(
-    X: np.ndarray,
-    manifold: geoopt.Manifold = POINCARE_BALL,
-) -> np.ndarray:
-    """``(N, N)`` geodesic distance matrix of embeddings ``X`` on ``manifold``.
+def pairwise_distance_matrix(representation: Representation) -> np.ndarray:
+    """``(N, N)`` exact geodesic distance matrix of a fitted ``Representation``.
 
     Parameters
     ----------
-    X:
-        ``(N, d)`` embedding coordinates in the manifold's chart (Poincaré ball
-        coordinates for the default manifold — what every embedder's
-        :meth:`~hypegrl.embedders.base.HyperbolicEmbedder.embeddings` returns).
-    manifold:
-        Manifold the coordinates live on (defaults to the unit-curvature
-        Poincaré ball).
+    representation:
+        A fitted :class:`~hypegrl.representations.Representation` (any chart —
+        polar / ball / hyperboloid), typically
+        ``embedder.embeddings_representation()``. Its ``dist()`` is the exact
+        hyperbolic distance, so — unlike computing on ``embeddings()`` ball
+        coordinates — the matrix is correct at all radii.
 
     Returns
     -------
     np.ndarray
-        ``(N, N)`` distances as ``float64``.
+        ``(N, N)`` distances as ``float64``, rows in the representation's node
+        order (``embedder.nodes()``).
     """
-    Xt = torch.as_tensor(np.asarray(X), dtype=torch.float64)
-    D = manifold.dist(Xt.unsqueeze(1), Xt.unsqueeze(0))
-    return D.detach().numpy()
+    return representation.dist().detach().cpu().numpy()
 
 
 def hyperbolic_knn_classification(
-    X: np.ndarray,
+    representation: Representation,
     y,
     k: int = 5,
-    manifold: geoopt.Manifold = POINCARE_BALL,
     test_size: float = 0.2,
     seed: Optional[int] = None,
 ) -> dict:
@@ -56,19 +57,20 @@ def hyperbolic_knn_classification(
 
     Splits nodes into a stratified train/test partition, then classifies each
     test node by majority vote among its ``k`` nearest *training* nodes in the
-    embedding, distances measured by ``manifold``. Row ``i`` of ``X`` must
-    correspond to label ``y[i]`` (align with ``embedder.nodes()``).
+    embedding, distances measured by the representation's exact ``dist()``. Row
+    ``i`` of the representation must correspond to label ``y[i]`` (align with
+    ``embedder.nodes()``).
 
     Parameters
     ----------
-    X:
-        ``(N, d)`` embedding coordinates (see :func:`pairwise_distance_matrix`).
+    representation:
+        A fitted :class:`~hypegrl.representations.Representation`, typically
+        ``embedder.embeddings_representation()`` (see :func:`pairwise_distance_matrix`
+        for why a representation rather than ball coordinates).
     y:
         Length-``N`` node labels (any hashable type).
     k:
         Number of neighbours. Must not exceed the training-set size.
-    manifold:
-        Manifold the embedding lives on (defaults to the Poincaré ball).
     test_size:
         Fraction of nodes held out for testing.
     seed:
@@ -81,7 +83,7 @@ def hyperbolic_knn_classification(
         ``n_train``, ``n_test``, ``n_classes``.
     """
     y = np.asarray(y)
-    D = pairwise_distance_matrix(X, manifold)
+    D = pairwise_distance_matrix(representation)
 
     idx = np.arange(len(y))
     train_idx, test_idx = train_test_split(

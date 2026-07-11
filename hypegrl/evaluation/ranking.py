@@ -17,8 +17,23 @@ from sklearn.metrics import f1_score, precision_score, recall_score
 
 
 def _rank_order(scores: np.ndarray, higher_is_link: bool) -> np.ndarray:
-    """Indices of ``scores`` ordered most-likely-link first (stable ties)."""
+    """Indices of ``scores`` ordered most-likely-link first (stable ties).
+
+    Rejects ``NaN`` scores: ``np.argsort`` sorts ``NaN`` to the end regardless of
+    direction, so a ``NaN``-scored candidate is silently ranked least-likely-link
+    rather than raising — a ``NaN`` in the decoder output would corrupt the metric
+    invisibly. Fail loudly instead. (``±inf`` is left alone: it orders
+    deterministically and a ``+inf`` distance is a legitimate "definitely not a
+    link".)
+    """
     scores = np.asarray(scores, dtype=float)
+    if np.isnan(scores).any():
+        raise ValueError(
+            "scores contains NaN; ranking is undefined (np.argsort places NaN "
+            "last regardless of `higher_is_link`, silently mis-ranking those "
+            "candidates). This usually means the decoder produced NaN — check the "
+            "embedding/decoder output before scoring."
+        )
     order = np.argsort(scores, kind="stable")
     if higher_is_link:
         order = order[::-1]

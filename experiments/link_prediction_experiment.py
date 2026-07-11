@@ -81,7 +81,10 @@ def _unweighted(G: nx.Graph) -> nx.Graph:
 def hyperbolic_candidate_scores(G_train, embedder, split):
     """Fit an embedder on the (unweighted) training graph, score by distance."""
     embedder.fit(_unweighted(G_train))
-    D = pairwise_distance_matrix(embedder.embeddings())
+    # Score on the exact representation, not embeddings() ball coordinates: the
+    # ball chart saturates past r ≈ 12, so distance ranking on it silently
+    # collapses large-radius candidates (leaves sit at large r on real graphs).
+    D = pairwise_distance_matrix(embedder.embeddings_representation())
     return candidate_scores(split, D, nodes=embedder.nodes())
 
 
