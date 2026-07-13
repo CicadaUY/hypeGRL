@@ -1,5 +1,5 @@
 {
-    "python.languageServer": "Default",
+    "python.languageServer": "None",
     "[python]": {
       "editor.formatOnSave": true,
       "editor.defaultFormatter": "ms-python.black-formatter",

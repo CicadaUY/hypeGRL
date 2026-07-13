@@ -6,6 +6,7 @@ import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
+from matplotlib.gridspec import GridSpec
 
 from hyperbolic_embeddings import HyperbolicEmbeddings
 
@@ -40,7 +41,7 @@ def plot_embeddings_on_axis(
 
     x, y = plot_embeddings[:, 0], plot_embeddings[:, 1]
 
-    ax.set_title(title, fontsize=10)
+    ax.set_title(title, fontsize=30)
 
     if output_space.lower() == "spherical":
         # Calculate boundary radius first for the background circle
@@ -99,6 +100,13 @@ def plot_embeddings_on_axis(
         # Set limits (boundary_radius already calculated above)
         ax.set_ylim(0, boundary_radius)
         ax.set_rlim(0, boundary_radius)
+
+        # Reduce radial grid lines (only 3 concentric circles)
+        ax.set_rticks([boundary_radius * 0.33, boundary_radius * 0.66, boundary_radius])
+
+        # Remove angle labels
+        ax.set_xticklabels([])
+        ax.set_yticklabels([])
 
     else:  # poincare
         # Plot edges
@@ -245,25 +253,46 @@ def main():
 
     # Generate comparison plot with all embedding types
     embedding_types = [
-        "poincare_embeddings",
-        "dmercator",
         "hydra",
-        "hypermap",
         "hydra_plus",
+        "hypermap",
+        "dmercator",
+        "poincare_embeddings",
         "poincare_maps",
         "lorentz",
     ]
 
-    # Create figure with subplots (3 rows x 3 columns, using 7 subplots)
-    # Use polar projection for spherical coordinates
+    # Display names with timing information
+    embedding_display_names = {
+        "hydra": "Hydra\n(0.003 s ±0.001)",
+        "hydra_plus": "Hydra+\n(0.02 s ±0.01)",
+        "hypermap": "HyperMap\n(0.04 s ±0.02)",
+        "dmercator": "D-Mercator\n(0.08 s ±0.01)",
+        "poincare_embeddings": "Poincaré Embeddings\n(1.08 s ±0.06)",
+        "poincare_maps": "Poincaré Maps\n(3.27 s ±0.15)",
+        "lorentz": "Lorentz Embeddings\n(18367.3 s ±1.2)",
+    }
+
+    # Create figure with subplots (2 rows, 4 in first row, 3 centered in second row)
+    # Use GridSpec for flexible layout with centered second row
+    fig = plt.figure(figsize=(24, 12))
+    gs = GridSpec(2, 8, figure=fig)
+    axes = []
+
     if args.output_space.lower() == "spherical":
-        fig = plt.figure(figsize=(18, 18))
-        axes = []
-        for i in range(9):
-            axes.append(fig.add_subplot(3, 3, i + 1, projection="polar"))
+        # First row: 4 plots, each spanning 2 columns
+        for i in range(4):
+            axes.append(fig.add_subplot(gs[0, i * 2 : (i * 2) + 2], projection="polar"))
+        # Second row: 3 plots, each spanning 2 columns, offset by 1 to center
+        for i in range(3):
+            axes.append(fig.add_subplot(gs[1, (i * 2) + 1 : (i * 2) + 3], projection="polar"))
     else:
-        fig, axes = plt.subplots(3, 3, figsize=(18, 18))
-        axes = axes.flatten()
+        # First row: 4 plots, each spanning 2 columns
+        for i in range(4):
+            axes.append(fig.add_subplot(gs[0, i * 2 : (i * 2) + 2]))
+        # Second row: 3 plots, each spanning 2 columns, offset by 1 to center
+        for i in range(3):
+            axes.append(fig.add_subplot(gs[1, (i * 2) + 1 : (i * 2) + 3]))
 
     all_embeddings_data = []
     failed_models = []
@@ -343,7 +372,7 @@ def main():
             output_space=args.output_space,
             labels=labels,
             edge_list=edge_list,
-            title=data["type"].replace("_", " ").title(),
+            title=embedding_display_names.get(data["type"], data["type"].replace("_", " ").title()),
             point_size=80,
             show_node_labels=False,
             node_label_size=6,
@@ -352,10 +381,7 @@ def main():
             colormap="viridis",
         )
 
-    # Hide unused subplots
-    for i in range(len(all_embeddings_data), 9):
-        axes[i].axis("off")
-
+    # No unused subplots to hide since we created exactly 7 with GridSpec
     plt.tight_layout()
 
     plot_path = os.path.join(args.plot_dir, f"all_embeddings_comparison_{args.output_space}.pdf")

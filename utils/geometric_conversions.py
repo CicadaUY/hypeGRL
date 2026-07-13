@@ -256,6 +256,8 @@ class HyperbolicConversions:
         """
         # Convert to spherical coordinates
         # r = acosh(t)
+        # For 2D: θ = atan2(x_2, x_1) to get full circle [0, 2π]
+        # For higher dimensions:
         # θ_1 = acos(x_1 / sinh r)
         # θ_i = acos(x_i / (sinh r * Π_{j=1}^{i-1} sin θ_j)) for i = 2, ..., n-1
         # θ_n = atan2(x_n, x_{n-1})
@@ -263,30 +265,38 @@ class HyperbolicConversions:
         t = x[..., -1]  # Time-like coordinate
         x_spatial = x[..., :-1]  # Spatial coordinates
 
-        # Calculate r
+        # Calculate r (hyperbolic radius)
         r = np.arccosh(t)
 
-        # Calculate angles iteratively
-        angles = []
-        current_radius = np.sinh(r)
+        # Special case for 2D: use atan2 directly for full circle
+        if x_spatial.shape[-1] == 2:
+            # For 2D, use atan2 to get angle in [-π, π], then convert to [0, 2π]
+            theta = np.arctan2(x_spatial[..., 1], x_spatial[..., 0])
+            # Convert to [0, 2π] range
+            theta = np.where(theta < 0, theta + 2 * np.pi, theta)
+            spherical = np.stack([r, theta], axis=-1)
+        else:
+            # General n-dimensional case
+            angles = []
+            current_radius = np.sinh(r)
 
-        for i in range(len(x_spatial.shape) - 1):
-            if i == 0:
-                # First angle
-                theta = np.arccos(x_spatial[..., 0] / current_radius)
-            else:
-                # Subsequent angles
-                theta = np.arccos(x_spatial[..., i] / current_radius)
-                current_radius = current_radius * np.sin(angles[-1])
-            angles.append(theta)
+            for i in range(len(x_spatial.shape) - 1):
+                if i == 0:
+                    # First angle
+                    theta = np.arccos(np.clip(x_spatial[..., 0] / current_radius, -1, 1))
+                else:
+                    # Subsequent angles
+                    theta = np.arccos(np.clip(x_spatial[..., i] / current_radius, -1, 1))
+                    current_radius = current_radius * np.sin(angles[-1])
+                angles.append(theta)
 
-        # Last angle using atan2
-        if x_spatial.shape[-1] > 1:
-            last_theta = np.arctan2(x_spatial[..., -1], x_spatial[..., -2])
-            angles.append(last_theta)
+            # Last angle using atan2
+            if x_spatial.shape[-1] > 1:
+                last_theta = np.arctan2(x_spatial[..., -1], x_spatial[..., -2])
+                angles.append(last_theta)
 
-        # Combine r with angles
-        spherical = np.concatenate([r[..., np.newaxis], np.stack(angles, axis=-1)], axis=-1)
+            # Combine r with angles
+            spherical = np.concatenate([r[..., np.newaxis], np.stack(angles, axis=-1)], axis=-1)
 
         return spherical
 
@@ -297,12 +307,15 @@ class HyperbolicConversions:
 
         Parameters:
         - spherical: Spherical coordinates (r, θ_1, ..., θ_{n-1})
+                     For 2D: (r, θ) where θ is in [0, 2π]
 
         Returns:
         - x: Coordinates in the N-dimensional hyperboloid model (R^(N+1))
         """
         # Convert to hyperboloid coordinates
         # t = cosh r
+        # For 2D: x_1 = sinh r cos θ, x_2 = sinh r sin θ
+        # For higher dimensions:
         # x_1 = sinh r cos θ_1
         # x_2 = sinh r sin θ_1 cos θ_2
         # x_i = sinh r * (Π_{j=1}^{i-1} sin θ_j) * cos θ_i for i = 1, ..., n-1
@@ -311,26 +324,33 @@ class HyperbolicConversions:
         r = spherical[..., 0]  # Distance
         angles = spherical[..., 1:]  # Angles
 
-        # Calculate t
+        # Calculate t (time coordinate)
         t = np.cosh(r)
-
-        # Calculate spatial coordinates
         sinh_r = np.sinh(r)
-        x_spatial = []
 
-        for i in range(angles.shape[-1]):
-            if i == 0:
-                # First coordinate: x_1 = sinh r cos θ_1
-                x_i = sinh_r * np.cos(angles[..., 0])
-            else:
-                # Subsequent coordinates: x_i = sinh r * (Π_{j=1}^{i-1} sin θ_j) * cos θ_i
-                sin_product = np.prod(np.sin(angles[..., :i]), axis=-1)
-                x_i = sinh_r * sin_product * np.cos(angles[..., i])
-            x_spatial.append(x_i)
+        # Special case for 2D: single angle θ in [0, 2π]
+        if angles.shape[-1] == 1:
+            theta = angles[..., 0]
+            x1 = sinh_r * np.cos(theta)
+            x2 = sinh_r * np.sin(theta)
+            x_spatial = [x1, x2]
+        else:
+            # General n-dimensional case
+            x_spatial = []
 
-        # Last coordinate: x_n = sinh r * (Π_{j=1}^{n-1} sin θ_j)
-        if angles.shape[-1] > 0:
-            last_sin_product = np.prod(np.sin(angles), axis=-1)
+            for i in range(angles.shape[-1]):
+                if i == 0:
+                    # First coordinate: x_1 = sinh r cos θ_1
+                    x_i = sinh_r * np.cos(angles[..., 0])
+                else:
+                    # Subsequent coordinates: x_i = sinh r * (Π_{j=1}^{i-1} sin θ_j) * cos θ_i
+                    sin_product = np.prod(np.sin(angles[..., :i]), axis=-1)
+                    x_i = sinh_r * sin_product * np.cos(angles[..., i])
+                x_spatial.append(x_i)
+
+            # Last coordinate: x_n = sinh r * (Π_{j=1}^{n-1} sin θ_j)
+            if angles.shape[-1] > 0:
+                last_sin_product = np.prod(np.sin(angles), axis=-1)
             x_n = sinh_r * last_sin_product
             x_spatial.append(x_n)
 

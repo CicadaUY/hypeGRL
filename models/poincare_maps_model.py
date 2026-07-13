@@ -211,6 +211,20 @@ class PoincareMapsModel(BaseHyperbolicModel):
     def get_embedding(self, node_id: str, model_path: Optional[str] = None) -> np.ndarray:
         if model_path:
             state = torch.load(model_path)
+            # Initialize model if not already created
+            if not hasattr(self, "model"):
+                # Get size from the state dict
+                size = state["lt.weight"].shape[0]
+                self.model = PoincareEmbedding(
+                    size=size,
+                    dim=self.dim,
+                    dist=PoincareDistance,
+                    max_norm=1,
+                    Qdist="laplace",
+                    lossfn="klSym",
+                    gamma=self.gamma,
+                    cuda=0,
+                )
             self.model.load_state_dict(state)
 
         embeddings = self.model.lt.weight.cpu().detach().numpy()
@@ -220,6 +234,20 @@ class PoincareMapsModel(BaseHyperbolicModel):
     def get_all_embeddings(self, model_path: Optional[str] = None) -> np.ndarray:
         if model_path:
             state = torch.load(model_path)
+            # Initialize model if not already created
+            if not hasattr(self, "model"):
+                # Get size from the state dict
+                size = state["lt.weight"].shape[0]
+                self.model = PoincareEmbedding(
+                    size=size,
+                    dim=self.dim,
+                    dist=PoincareDistance,
+                    max_norm=1,
+                    Qdist="laplace",
+                    lossfn="klSym",
+                    gamma=self.gamma,
+                    cuda=0,
+                )
             self.model.load_state_dict(state)
 
         return self.model.lt.weight.detach().cpu().numpy()
