@@ -63,6 +63,7 @@ from hypegrl.manifolds.poincare import (
 )
 from hypegrl.representations import (
     BallRepresentation,
+    ExactPolarRepresentation,
     HyperboloidRepresentation,
     PolarRepresentation,
     build_representation,
@@ -74,6 +75,7 @@ from hypegrl.representations import (
 # init still produces its 2D Poincaré-ball warm start regardless.
 _REPRESENTATIONS = {
     "polar": PolarRepresentation,
+    "exact_polar": ExactPolarRepresentation,
     "ball": BallRepresentation,
     "hyperboloid": HyperboloidRepresentation,
 }

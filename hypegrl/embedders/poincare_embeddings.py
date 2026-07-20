@@ -75,6 +75,7 @@ from hypegrl.inference.riemannian_optimizer import riemannian_optimize
 from hypegrl.manifolds.poincare import POINCARE_BALL
 from hypegrl.representations import (
     BallRepresentation,
+    ExactPolarRepresentation,
     HyperboloidRepresentation,
     PolarRepresentation,
     build_representation,
@@ -86,6 +87,7 @@ from hypegrl.representations import (
 # Fermi-Dirac losses are functions of the pairwise distance only.
 _REPRESENTATIONS = {
     "polar": PolarRepresentation,
+    "exact_polar": ExactPolarRepresentation,
     "ball": BallRepresentation,
     "hyperboloid": HyperboloidRepresentation,
 }

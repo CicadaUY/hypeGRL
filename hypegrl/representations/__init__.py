@@ -9,7 +9,10 @@ from hypegrl.representations.base import (
     zero_diagonal,
 )
 from hypegrl.representations.hyperboloid import HyperboloidRepresentation
-from hypegrl.representations.polar import PolarRepresentation
+from hypegrl.representations.polar import (
+    ExactPolarRepresentation,
+    PolarRepresentation,
+)
 
 __all__ = [
     "Representation",
@@ -17,6 +20,7 @@ __all__ = [
     "build_representation",
     "zero_diagonal",
     "PolarRepresentation",
+    "ExactPolarRepresentation",
     "BallRepresentation",
     "HyperboloidRepresentation",
 ]

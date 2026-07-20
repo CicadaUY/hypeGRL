@@ -132,6 +132,7 @@ from hypegrl.manifolds.lorentz import LORENTZ, StableLorentz
 from hypegrl.manifolds.poincare import poincare_to_lorentz
 from hypegrl.representations import (
     BallRepresentation,
+    ExactPolarRepresentation,
     HyperboloidRepresentation,
     PolarRepresentation,
     build_representation,
@@ -145,6 +146,7 @@ from hypegrl.representations import (
 # constructor (only the hyperboloid uses it).
 _REPRESENTATIONS = {
     "polar": PolarRepresentation,
+    "exact_polar": ExactPolarRepresentation,
     "ball": BallRepresentation,
     "hyperboloid": HyperboloidRepresentation,
 }

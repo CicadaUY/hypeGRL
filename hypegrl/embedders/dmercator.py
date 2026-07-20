@@ -68,6 +68,7 @@ from hypegrl.inference.riemannian_optimizer import riemannian_optimize
 from hypegrl.manifolds.poincare import POINCARE_BALL
 from hypegrl.representations import (
     BallRepresentation,
+    ExactPolarRepresentation,
     HyperboloidRepresentation,
     PolarRepresentation,
     build_representation,
@@ -78,6 +79,7 @@ from hypegrl.representations import (
 # leaves (the ball saturates at r≈12, the hyperboloid distance fails at r≈18).
 _REPRESENTATIONS = {
     "polar": PolarRepresentation,
+    "exact_polar": ExactPolarRepresentation,
     "ball": BallRepresentation,
     "hyperboloid": HyperboloidRepresentation,
 }

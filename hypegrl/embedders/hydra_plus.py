@@ -43,6 +43,7 @@ from hypegrl.embedders.hydra import HydraEmbedder, _poincare_cartesian_to_polar
 from hypegrl.inference.riemannian_optimizer import riemannian_optimize
 from hypegrl.representations import (
     BallRepresentation,
+    ExactPolarRepresentation,
     HyperboloidRepresentation,
     PolarRepresentation,
     build_representation,
@@ -55,6 +56,7 @@ from hypegrl.representations import (
 # was only an implementation choice.
 _REPRESENTATIONS = {
     "polar": PolarRepresentation,
+    "exact_polar": ExactPolarRepresentation,
     "ball": BallRepresentation,
     "hyperboloid": HyperboloidRepresentation,
 }

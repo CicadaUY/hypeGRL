@@ -35,6 +35,7 @@ from hypegrl.inference.joint_optimizer import joint_optimize
 from hypegrl.inference.riemannian_optimizer import riemannian_optimize
 from hypegrl.representations import (
     BallRepresentation,
+    ExactPolarRepresentation,
     HyperboloidRepresentation,
     PolarRepresentation,
     build_representation,
@@ -45,6 +46,7 @@ from hypegrl.representations import (
 # default — it is exact at all radii, where the ball saturates past r≈12.
 _REPRESENTATIONS = {
     "polar": PolarRepresentation,
+    "exact_polar": ExactPolarRepresentation,
     "ball": BallRepresentation,
     "hyperboloid": HyperboloidRepresentation,
 }
