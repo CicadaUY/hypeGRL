@@ -37,8 +37,11 @@ from hypegrl.evaluation import (
 EmbedderFactory = Callable[[int], object]
 
 HYPERBOLIC_METHODS: dict[str, EmbedderFactory] = {
-    # curvature=None estimates the curvature from the data (the original Hydra's
-    # behaviour); the library default curvature=1.0 fixes it and underperforms.
+    # curvature=None runs the reference implementation's 1-D stress-minimising search
+    # for the curvature; the library default curvature=1.0 fixes it and underperforms
+    # (38 -> 64 F1 on ToggleSwitch). The Hydra paper fixes -k = -1 throughout its own
+    # experiments (Keller-Ressel & Nargang 2021, sec. 4.1), so estimating it is an
+    # implementation option the paper does not exercise.
     "Hydra+": lambda s: HydraPlusEmbedder(dim=2, curvature=None, random_state=s),
     # d1_init="mercator": the original Mercator ordering-init for D=1 (d=2),
     # which the paper's original-code wrapper used; the library default "le" is
