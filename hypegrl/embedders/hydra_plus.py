@@ -2,25 +2,32 @@
 HYDRA+ embedder.
 
 Extends the closed-form HYDRA embedding with a Riemannian gradient
-refinement step on the Poincaré ball, using the HYDRA solution as a
-warm start. This follows the encoder-decoder framework of Chami et al.
-(2022), where the spectral step acts as the encoder and the Riemannian
-optimiser refines the embeddings to further minimise the stress.
+refinement step, using the HYDRA solution as a warm start. This follows the
+encoder-decoder framework of Chami et al. (2022), where the spectral step acts
+as the encoder and the Riemannian optimiser refines the embeddings to further
+minimise the stress.
+
+Where HYDRA minimises the *strain* (the Frobenius residual on the
+cosh-linearised Gram matrices, which is what makes it an exactly solvable
+eigenproblem), this refinement minimises the *stress* — the error in the actual
+distances — which is the quantity one really cares about.
 
 Model
 -----
 ::
 
-    Structural similarity : Pairwise distance matrix (from Graph or Matrix)
-                             D_ij
-    Encoder               : HYDRA spectral step (warm start)
-                             → X_init ∈ B^dim
-    Refinement            : Riemannian Adam on (B^dim, g_k) minimising
-                             L(X) = sum_{i<j} (d_H(x_i,x_j) - D_ij)^2
-    Decoder               : Pairwise Poincaré distances
-                             d_H(x_i, x_j)
-    Loss                  : Stress (squared distance error)
-                             sum_{i<j} (d_H(x_i,x_j) - D_ij)^2
+    Structural similarity : Pairwise distance matrix (from Graph or Matrix),
+                             scaled by the curvature: D_ij * sqrt(k)
+    Encoder               : HYDRA spectral step (warm start), then Riemannian
+                             Adam over the chosen Representation (chart)
+    Decoder               : Pairwise hyperbolic distances  d_H(x_i, x_j)
+    Loss                  : Raw (squared) stress over the upper triangle
+                             L(X) = sum_{i<j} (d_H(x_i,x_j) - D_ij*sqrt(k))^2
+
+The square is deliberate: it shares its minimiser with the rooted stress
+``sqrt(L)`` reported by the ``stress`` property, but has a smooth gradient
+everywhere, whereas ``d/dL sqrt(L) = 1/(2 sqrt(L))`` blows up exactly as the fit
+approaches perfect.
 
 References
 ----------

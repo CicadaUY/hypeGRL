@@ -9,18 +9,25 @@ Model
 -----
 ::
 
-    Structural similarity : All-pairs shortest-path distance matrix
-                             D_ij = d_G(i, j)
-    Encoder               : Spectral decomposition of the hyperbolic
-                             Gram matrix  A_ij = cosh(sqrt(k) * D_ij)
+    Structural similarity : Hyperbolic Gram matrix of the all-pairs
+                             shortest-path distances,
+                             A_ij = cosh(sqrt(k) * D_ij),  D_ij = d_G(i, j)
+    Encoder               : Spectral decomposition of that Gram matrix
                              → Poincaré disk coordinates (r, directional)
-    Decoder               : Pairwise Poincaré distances
-                             d_H(x_i, x_j)
-    Loss                  : Stress (RMS distance error)
-                             sqrt(sum_{i<j} (d_H(x_i,x_j) - D_ij)^2)
+    Decoder               : cosh(sqrt(k) * d_H(x_i, x_j))
+    Loss                  : Strain — the Frobenius residual of the
+                             rank-(dim+1) Lorentzian reconstruction,
+                             ||A_hat - A||_F
 
-The embedding is closed-form (non-gradient). Curvature ``k`` may be
-fixed by the caller or optimised via scalar minimisation of the stress.
+The embedding is closed-form (non-gradient): the eigendecomposition minimises
+the strain *exactly* (Eckart-Young), which is why the loss is stated on the
+cosh-linearised Gram matrices rather than on the distances themselves.
+
+The **stress** ``sqrt(sum_{i<j} (d_H(x_i,x_j) - D_ij)^2)`` — the error in the
+actual distances — is computed afterwards as a reported diagnostic (see the
+``stress`` property), not minimised here; closing the gap between the two is
+what the gradient refinement in ``hydra_plus.py`` does. Curvature ``k`` may be
+fixed by the caller or optimised via scalar minimisation of that stress.
 
 References
 ----------
@@ -182,7 +189,8 @@ def _compute_stress(
     curvature: float,
     D: np.ndarray,
 ) -> float:
-    """RMS stress between reconstructed and original distances."""
+    """Stress: Frobenius norm of the residual between reconstructed and original
+    distances, ``sqrt(sum_{i<j} (d_H - D)^2)`` (no averaging)."""
     D_hat = poincare_distances_polar(r, directional, curvature)
     mask  = np.triu(np.ones_like(D, dtype=bool), k=1)
     return float(np.sqrt(np.sum((D_hat[mask] - D[mask]) ** 2)))
@@ -456,7 +464,13 @@ class HydraEmbedder(HyperbolicEmbedder):
 
     @property
     def stress(self) -> Optional[float]:
-        """RMS stress of the fitted embedding (``None`` before fitting)."""
+        """
+        Stress of the fitted embedding, ``sqrt(sum_{i<j} (d_H - D)^2)``
+        (``None`` before fitting).
+
+        A reported diagnostic, not the fitted objective — HYDRA minimises the
+        ``strain``. Directly comparable to ``HydraPlusEmbedder.stress``.
+        """
         return self._stress
 
     @property
