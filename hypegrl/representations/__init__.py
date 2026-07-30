@@ -13,6 +13,7 @@ from hypegrl.representations.polar import (
     ExactPolarRepresentation,
     PolarRepresentation,
 )
+from hypegrl.representations.tangent import TangentRepresentation
 
 __all__ = [
     "Representation",
@@ -23,4 +24,5 @@ __all__ = [
     "ExactPolarRepresentation",
     "BallRepresentation",
     "HyperboloidRepresentation",
+    "TangentRepresentation",
 ]

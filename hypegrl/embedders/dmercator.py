@@ -71,6 +71,7 @@ from hypegrl.representations import (
     ExactPolarRepresentation,
     HyperboloidRepresentation,
     PolarRepresentation,
+    TangentRepresentation,
     build_representation,
 )
 
@@ -80,6 +81,7 @@ from hypegrl.representations import (
 _REPRESENTATIONS = {
     "polar": PolarRepresentation,
     "exact_polar": ExactPolarRepresentation,
+    "tangent": TangentRepresentation,
     "ball": BallRepresentation,
     "hyperboloid": HyperboloidRepresentation,
 }
