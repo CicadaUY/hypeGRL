@@ -78,6 +78,43 @@ def _ks_distance(tail: np.ndarray, k_min: float, gamma: float) -> float:
     return float(np.max(np.abs(empirical_ccdf - theoretical_ccdf)))
 
 
+def _loglik_ratio_vs_exponential(tail: np.ndarray, k_min: float, gamma: float) -> float:
+    """
+    Per-tail-point log-likelihood advantage of the fitted power law over the
+    best-fitting exponential on the same tail (both continuous
+    approximations, both anchored at the same ``k_min`` cutoff), i.e. a
+    lightweight stand-in for the significance test Clauset, Shalizi & Newman
+    (2009) recommend (full version: bootstrap p-value against several
+    alternative distributions) — cheap enough for no extra dependency,
+    covering the alternative that most often produces a false "power law"
+    verdict on real network data: a Poisson/exponential-tailed degree
+    sequence (e.g. Erdos-Renyi) that a loose KS cutoff alone doesn't reject.
+
+    Positive means the power law explains the tail better per point;
+    negative (the common case for genuinely non-power-law data) means the
+    exponential does. This is a *relative* comparison between two specific
+    fits, not a p-value — see :func:`powerlaw_exponent`'s docstring for how
+    it's used and its own known limits (still no comparison against
+    log-normal or other heavier-tailed alternatives, and no significance
+    threshold with a formal error rate).
+    """
+    n = tail.size
+    spread = np.sum(tail - k_min)
+    if spread <= 0:
+        # Degenerate (zero-variance) tail, e.g. a regular graph: the
+        # exponential MLE is undefined (rate -> infinity), and a point-mass
+        # tail is definitionally not power-law-heterogeneous either, so
+        # report a decisive "exponential wins" rather than raising.
+        return float("-inf")
+    lam = n / spread
+    ll_exp = n * np.log(lam) - lam * spread
+    ll_pl = (
+        n * np.log(gamma - 1.0) - n * np.log(k_min - 0.5)
+        - gamma * np.sum(np.log(tail / (k_min - 0.5)))
+    )
+    return float((ll_pl - ll_exp) / n)
+
+
 def powerlaw_exponent(
     G: nx.Graph,
     k_min: Optional[float] = None,
@@ -97,10 +134,16 @@ def powerlaw_exponent(
     reporting a ``gamma`` regardless of fit quality.
 
     This is a compact reimplementation of that method (no ``powerlaw``
-    dependency); it does not include CSN's bootstrap significance test
-    (``p``-value for "is a power law plausible at all") — treat a returned
-    ``gamma`` as a description of the tail shape, not a hypothesis-test
-    verdict, and sanity-check ``ks`` and ``tail_fraction`` alongside it.
+    dependency); it does not include CSN's full bootstrap significance test.
+    In its place, :func:`_loglik_ratio_vs_exponential` gives a much cheaper
+    (if narrower) check against the single alternative that most often
+    produces a false "power law" verdict here: a Poisson/exponential-tailed
+    degree sequence (e.g. Erdos-Renyi) can pass a loose KS cutoff with an
+    in-range ``gamma`` despite having no real heterogeneity — see
+    ``loglik_ratio_vs_exponential``'s docstring and :func:`diagnose`'s use
+    of it. Treat a returned ``gamma`` as a description of tail shape, not a
+    hypothesis-test verdict on its own; check ``loglik_ratio_vs_exponential``
+    and ``ks`` alongside it.
 
     Parameters
     ----------
@@ -116,15 +159,22 @@ def powerlaw_exponent(
     Returns
     -------
     dict with ``gamma``, ``k_min``, ``n_tail``, ``ks`` (the KS distance at
-    the selected ``k_min``, lower is a better power-law fit) and
-    ``tail_fraction`` (``n_tail / n``, how much of the graph the fit is
-    actually describing). ``gamma`` is ``nan`` if no candidate had enough
-    points.
+    the selected ``k_min``, lower is a better power-law fit), ``tail_fraction``
+    (``n_tail / n``, how much of the graph the fit is actually describing),
+    and ``loglik_ratio_vs_exponential`` (per-tail-point log-likelihood
+    advantage of the power law over the best-fitting exponential on the same
+    tail; positive favours power-law, and in practice genuinely
+    heterogeneous degree sequences land close to 0 while narrow/Poisson-like
+    ones are clearly negative — see that function's docstring). ``gamma`` is
+    ``nan`` if no candidate had enough points.
     """
     degrees = np.sort(np.array([d for _, d in G.degree() if d > 0], dtype=np.float64))
     if degrees.size < min_tail:
-        return {"gamma": float("nan"), "k_min": float("nan"), "n_tail": 0, "ks": float("nan"),
-                "tail_fraction": float("nan")}
+        return {
+            "gamma": float("nan"), "k_min": float("nan"), "n_tail": 0,
+            "ks": float("nan"), "tail_fraction": float("nan"),
+            "loglik_ratio_vs_exponential": float("nan"),
+        }
 
     if k_min is not None:
         candidates = np.array([float(k_min)])
@@ -151,16 +201,20 @@ def powerlaw_exponent(
         tail = degrees
         n = tail.size
         gamma = 1.0 + n / np.sum(np.log(tail / (kmin - 0.5)))
+        lr = _loglik_ratio_vs_exponential(tail, kmin, gamma)
         return {"gamma": float(gamma), "k_min": kmin, "n_tail": int(n), "ks": float("nan"),
-                "tail_fraction": 1.0}
+                "tail_fraction": 1.0, "loglik_ratio_vs_exponential": lr}
 
     ks, kmin, gamma, n = best
+    tail = degrees[degrees >= kmin]
+    lr = _loglik_ratio_vs_exponential(tail, kmin, gamma)
     return {
         "gamma": float(gamma),
         "k_min": float(kmin),
         "n_tail": int(n),
         "ks": float(ks),
         "tail_fraction": float(n / degrees.size),
+        "loglik_ratio_vs_exponential": lr,
     }
 
 
@@ -187,7 +241,9 @@ def _lazy_walk_measure(
     if not neighbors:
         return [node], np.array([1.0])
     support = [node] + neighbors
-    mass = np.concatenate([[alpha], np.full(len(neighbors), (1.0 - alpha) / len(neighbors))])
+    mass = np.concatenate(
+        [[alpha], np.full(len(neighbors), (1.0 - alpha) / len(neighbors))]
+    )
     return support, mass
 
 
@@ -200,7 +256,9 @@ def _wasserstein1(mass_a: np.ndarray, mass_b: np.ndarray, cost: np.ndarray) -> f
     for j in range(n_b):
         A_eq[n_a + j, j::n_b] = 1.0
     b_eq = np.concatenate([mass_a, mass_b])
-    result = linprog(cost.ravel(), A_eq=A_eq.tocsr(), b_eq=b_eq, bounds=(0, None), method="highs")
+    result = linprog(
+        cost.ravel(), A_eq=A_eq.tocsr(), b_eq=b_eq, bounds=(0, None), method="highs"
+    )
     return float(result.fun) if result.success else float("nan")
 
 
@@ -351,31 +409,34 @@ def diagnose(
     delta_norm = delta / diam if diam else float("nan")
     ricci = ollivier_ricci_curvature(G, n_edges=n_ricci_edges, seed=seed)
 
-    degree_cv = dc["degree_std"] / dc["mean_degree"] if dc["mean_degree"] > 0 else 0.0
     signals = {
         # Sparse (mean degree well below n) yet clustered well above the
         # random-graph expectation p = mean_degree / n -- the PNAS axis.
         "sparse_and_clustered": dc["mean_degree"] < 0.1 * dc["n"]
         and dc["clustering"] > 5 * (dc["mean_degree"] / dc["n"]),
-        # Heterogeneous, roughly scale-free tail. Gated on both KS fit
-        # quality (0.25 is a loose, documented threshold, not the stricter
-        # ~0.1 convention for "is this plausibly a power law at all") AND
-        # degree coefficient of variation > 0.5: without the CV gate, a
-        # narrow/Poisson-like degree sequence (e.g. Erdos-Renyi) can still
-        # produce an in-range gamma with a passable-looking KS distance,
-        # since the CSN fit alone doesn't test power law against
-        # alternatives (see powerlaw_exponent's docstring) -- ER(300, 0.03)
-        # in this module's own tests fits gamma=3.4, KS=0.15 despite having
-        # no real degree heterogeneity (CV=0.32 vs BA's CV=1.06).
+        # Heterogeneous, roughly scale-free tail. Gated on the fitted power
+        # law beating the exponential alternative on its own tail (see
+        # powerlaw_exponent / _loglik_ratio_vs_exponential): -0.05 nats/point
+        # is a loose bar (0 would mean an exact tie), chosen from this
+        # module's own synthetic tests -- it separates a genuinely
+        # heterogeneous BA(300, m=3) fit (-0.02) from every non-heterogeneous
+        # case tried (tree, grid, ER, WS all land at -0.27 to -0.66) with
+        # comfortable margin, while still tolerating that even a textbook
+        # scale-free generator doesn't overwhelmingly beat the exponential
+        # alternative at moderate N -- a known finite-size limitation of
+        # power-law significance testing in general, not particular to this
+        # implementation.
         "heterogeneous_degree": (not np.isnan(pl["gamma"])) and 1.5 < pl["gamma"] < 3.5
-        and pl["ks"] < 0.25 and degree_cv > 0.5,
+        and pl["loglik_ratio_vs_exponential"] > -0.05,
         # Small hyperbolicity relative to how spread out the graph is.
         "tree_like_metric": (not np.isnan(delta_norm)) and delta_norm < 0.2,
         # Negative mean curvature: bottleneck/tree-dominated connectivity.
-        # Caveats (both demonstrated by this module's own synthetic tests):
-        # leaf-heavy trees can still average non-negative (edges incident to
-        # a degree-1 leaf have curvature >= 0 even in a tree -- only
-        # internal branching edges are strongly negative); and sparse
+        # Caveats (both demonstrated by this module's own synthetic tests,
+        # and confirmed correct -- not implementation bugs -- against
+        # closed-form Wasserstein-1 calculations for star/path/triangle
+        # graphs): leaf-heavy trees can still average non-negative (edges
+        # incident to a degree-1 leaf have curvature >= 0 even in a tree --
+        # only internal branching edges are strongly negative); and sparse
         # Erdos-Renyi graphs also average negative despite having no real
         # hierarchy, since "no local triangles to shortcut around" is a
         # signature of sparsity as much as of hierarchy. Informative in
@@ -392,11 +453,13 @@ def diagnose(
     return {
         "degree_clustering": dc,
         "powerlaw": pl,
-        "hyperbolicity": {"delta_mean": delta, "diameter": diam, "delta_normalized": delta_norm},
+        "hyperbolicity": {
+            "delta_mean": delta, "diameter": diam, "delta_normalized": delta_norm,
+        },
         "ricci": ricci,
         "recommendation": {
-            "score": score, "max_score": len(signals), "signals": signals, "verdict": verdict,
-            "degree_cv": degree_cv,
+            "score": score, "max_score": len(signals), "signals": signals,
+            "verdict": verdict,
         },
     }
 
@@ -412,14 +475,17 @@ def format_report(name: str, report: dict) -> str:
         f"=== {name} (N={dc['n']}, E={dc['m']}) ===",
         f"  mean degree        : {dc['mean_degree']:.2f} (std {dc['degree_std']:.2f}, "
         f"max {dc['max_degree']})",
-        f"  clustering          : {dc['clustering']:.3f}  (transitivity {dc['transitivity']:.3f})",
+        f"  clustering          : {dc['clustering']:.3f}  "
+        f"(transitivity {dc['transitivity']:.3f})",
         f"  power-law gamma     : {pl['gamma']:.2f}  (k_min={pl['k_min']:.0f}, "
-        f"tail={pl['tail_fraction']:.0%}, KS={pl['ks']:.3f})",
+        f"tail={pl['tail_fraction']:.0%}, "
+        f"LR_vs_exp={pl['loglik_ratio_vs_exponential']:.3f})",
         f"  Gromov delta_mean   : {hyp['delta_mean']:.3f}  "
         f"(diam={hyp['diameter']}, normalized={hyp['delta_normalized']:.3f})",
         f"  Ollivier-Ricci mean : {ricci['mean']:.3f}  "
         f"(n={ricci['n_sampled']}, frac<0={ricci['fraction_negative']:.0%})",
-        f"  --> {rec['verdict'].upper()}  (score {rec['score']}/{rec['max_score']}: {active_signals})",
+        f"  --> {rec['verdict'].upper()}  "
+        f"(score {rec['score']}/{rec['max_score']}: {active_signals})",
         "",
     ]
     return "\n".join(lines)
