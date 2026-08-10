@@ -31,6 +31,7 @@ from typing import Optional
 
 import networkx as nx
 import numpy as np
+import powerlaw
 from scipy.optimize import linprog
 from scipy.sparse import lil_matrix
 
@@ -217,6 +218,107 @@ def powerlaw_exponent(
         "loglik_ratio_vs_exponential": lr,
     }
 
+# ---------------------------------------------------------------------------
+# Powerlaw exponent using `powerlaw` package
+# ---------------------------------------------------------------------------
+
+def powerlaw_exponent_lib(
+    G: nx.Graph,
+    k_min: Optional[float] = None,
+    min_tail: int = 20,
+) -> dict:
+    """
+    Fit a power-law tail to the degree sequence using ``powerlaw``.
+
+    Parameters
+    ----------
+    G : nx.Graph
+        The graph.
+    k_min : float, optional
+        Fixed lower cutoff for the power-law tail. If None, ``powerlaw``
+        selects the cutoff by minimizing the KS distance.
+    min_tail : int, default=20
+        Minimum number of observations required in the fitted tail.
+
+    Returns
+    -------
+    dict
+        Dictionary containing:
+
+        ``gamma``
+            Estimated power-law exponent.
+
+        ``k_min``
+            Lower cutoff of the fitted tail.
+
+        ``n_tail``
+            Number of observations in the fitted tail.
+
+        ``ks``
+            KS distance between the empirical tail and fitted power law.
+
+        ``tail_fraction``
+            Fraction of nonzero degrees included in the fitted tail.
+
+        ``loglik_ratio_vs_exponential``
+            Log-likelihood ratio per tail observation comparing the
+            power-law fit against an exponential fit. Positive values
+            favor the power law.
+
+        ``loglik_ratio_vs_exponential_p``
+            p-value associated with the likelihood-ratio comparison.
+    """
+    degrees = np.asarray(
+        [d for _, d in G.degree() if d > 0],
+        dtype=float,
+    )
+
+    if degrees.size < min_tail:
+        return {
+            "gamma": float("nan"),
+            "k_min": float("nan"),
+            "n_tail": 0,
+            "ks": float("nan"),
+            "tail_fraction": float("nan"),
+            "loglik_ratio_vs_exponential": float("nan"),
+            "loglik_ratio_vs_exponential_p": float("nan"),
+        }
+
+    fit = powerlaw.Fit(
+        degrees,
+        discrete=True,
+        xmin=k_min,
+        verbose=False,
+    )
+
+    tail = degrees[degrees >= fit.xmin]
+
+    # ``powerlaw`` may select an xmin leaving too few observations.
+    if tail.size < min_tail:
+        return {
+            "gamma": float("nan"),
+            "k_min": float(fit.xmin),
+            "n_tail": int(tail.size),
+            "ks": float("nan"),
+            "tail_fraction": float(tail.size / degrees.size),
+            "loglik_ratio_vs_exponential": float("nan"),
+            "loglik_ratio_vs_exponential_p": float("nan"),
+        }
+
+    R, p = fit.distribution_compare(
+        "power_law",
+        "exponential",
+    )
+
+    return {
+        "gamma": float(fit.power_law.alpha),
+        "k_min": float(fit.xmin),
+        "n_tail": int(tail.size),
+        "ks": float(fit.power_law.D),
+        "tail_fraction": float(tail.size / degrees.size),
+        "loglik_ratio_vs_exponential": float(R / tail.size),
+        "loglik_ratio_vs_exponential_p": float(p),
+    }
 
 # ---------------------------------------------------------------------------
 # Ollivier-Ricci curvature (sampled)
@@ -403,10 +505,10 @@ def diagnose(
         )
 
     dc = degree_and_clustering(G)
-    pl = powerlaw_exponent(G)
+    pl = powerlaw_exponent_lib(G)
     delta = mean_hyperbolicity(G, n_samples=n_hyperbolicity_samples, seed=seed)
-    diam = nx.diameter(G) if G.number_of_nodes() < 5000 else None
-    delta_norm = delta / diam if diam else float("nan")
+    diam = nx.diameter(G,usebounds=True) # if G.number_of_nodes() < 5000 else nx.diameter(G,usebounds=True)
+    delta_norm = delta / diam # if diam else float("nan")
     ricci = ollivier_ricci_curvature(G, n_edges=n_ricci_edges, seed=seed)
 
     signals = {
