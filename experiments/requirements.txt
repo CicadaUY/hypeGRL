@@ -4,3 +4,4 @@
 pandas>=2.0            # single-cell CSV loading
 torch-geometric>=2.4   # PolBlogs dataset (Table II)
 graspologic>=3.4       # RDPG / adjacency spectral embedding baseline (Table I)
+nltk>=3.10.2           # Wordnet/mammals dataset
