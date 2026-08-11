@@ -4,12 +4,11 @@ from typing import Optional
 
 import networkx as nx
 import numpy as np
-import torch
 from scipy.optimize import minimize
 
 from hypegrl.embedders.precomputed import PrecomputedEmbedder
 from hypegrl.generation.base import GraphGenerator
-from hypegrl.manifolds.poincare import POINCARE_BALL
+from hypegrl.representations import PolarRepresentation
 
 
 class FermiDiracGenerator(GraphGenerator):
@@ -48,10 +47,11 @@ class FermiDiracGenerator(GraphGenerator):
       than approximating it with a single global ``r``, ``t``.
     - **Generic global model** (whenever ``r`` or ``t`` is supplied, or the
       embedder is not natively generative): pairwise hyperbolic distances
-      are read directly off the embedding — via
-      ``embeddings_representation()`` when available (exact at all radii),
-      falling back to the Poincaré-ball ``embeddings()`` otherwise — and
-      combined with a single global ``r``, ``t`` in the formula above. Call
+      are read off the embedding through a
+      :class:`~hypegrl.representations.Representation` — the embedder's own
+      when it has one, else the polar chart built from its ball coordinates,
+      so the distances are exact at every radius either way — and combined
+      with a single global ``r``, ``t`` in the formula above. Call
       :meth:`fit` to estimate ``r``, ``t`` by maximum likelihood against an
       observed graph, or set them directly at construction.
 
@@ -326,18 +326,23 @@ class FermiDiracGenerator(GraphGenerator):
 
     def _distance_matrix(self) -> np.ndarray:
         """
-        ``(N, N)`` pairwise hyperbolic distance under the embedder's current
-        fit — the exact representation geometry when available, else the
-        Poincaré-ball ``embeddings()``.
+        ``(N, N)`` exact pairwise hyperbolic distance under the embedder's
+        current fit, always measured through a ``Representation``.
+
+        Embedders that build one (every gradient method) supply it directly.
+        Those that do not — :class:`~hypegrl.embedders.precomputed.PrecomputedEmbedder`,
+        :class:`~hypegrl.embedders.hydra.HydraEmbedder` — expose only
+        ``embeddings()``, whose Poincaré-ball coordinates are re-charted into
+        the polar representation here. Measuring in the ball instead would cap
+        every distance at ``2·artanh(1 − 1e-7) = 16.811243``, silently
+        flattening the far end of the probability matrix for a large-radius
+        embedding.
         """
         embedder = self.embedder
         rep = embedder.embeddings_representation()
-        if rep is not None:
-            return rep.dist().detach().cpu().numpy()
-        X = torch.as_tensor(embedder.embeddings(), dtype=torch.float64)
-        return POINCARE_BALL.dist(
-            X.unsqueeze(1), X.unsqueeze(0)
-        ).detach().cpu().numpy()
+        if rep is None:
+            rep = PolarRepresentation.from_ball(embedder.embeddings())
+        return rep.dist().detach().cpu().numpy()
 
     def _adjacency_in_embedder_order(self, G: nx.Graph) -> np.ndarray:
         """Binary ``(N, N)`` adjacency of ``G``, in ``embedder.nodes()`` order."""

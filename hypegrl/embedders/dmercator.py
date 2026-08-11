@@ -4,9 +4,10 @@ D-Mercator graph embedder.
 Embeds a graph into hyperbolic space H^{D+1} (Poincaré ball B^d, d = D+1)
 following the geometric network model of Jankowski et al. (2023). The original
 D-Mercator pipeline produces the warm start in the S^D model; the embedding is
-then refined directly on the **Poincaré ball**, where both the angular position
-and the radial ("popularity") coordinate of every node move jointly under a
-hyperbolic-distance Fermi-Dirac likelihood.
+then refined in the chart selected by ``representation=`` (**polar** by
+default), where both the angular position and the radial ("popularity")
+coordinate of every node move jointly under a hyperbolic-distance Fermi-Dirac
+likelihood.
 
 Encoder-decoder framework
 -------------------------
@@ -19,21 +20,33 @@ Encoder-decoder framework
                             → likelihood-maximisation refinement → κ readjust
     Warm start            : x_i = tanh(r_i/2) · v_i ∈ B^d
                             with r_i = R̂ − (2/D) ln(κ_i/κ_min)  (Eq. 7)
-    Refinement            : Riemannian Adam on the Poincaré ball minimising
+    Refinement            : Riemannian Adam in the chosen chart, minimising
                             the Fermi-Dirac NLL on hyperbolic distances
     Decoder               : p_ij = 1 / (1 + e^{(β/2)(d_H(x_i,x_j) − R̂)})
     Loss                  : -Σ_{i<j}[a_ij ln p_ij + (1−a_ij) ln(1−p_ij)]
-    Output                : Poincaré ball coordinates
+    Output                : Poincaré ball coordinates (``embeddings()``); the
+                            exact geometry is ``embeddings_representation()``
 
-Why the Poincaré ball (and not the hyperboloid)
------------------------------------------------
-Both are exact models of H^{D+1}, and ``geoopt.PoincareBall.dist`` is the exact
-hyperbolic distance — no approximation. The choice is numerical: low-degree
-leaf nodes belong at large radius (``r ≈ R̂``, which reaches ~16–20 even for
-tiny graphs), and on the hyperboloid that means a timelike coordinate
-``cosh(r) ≈ 1e5``–``1e7`` that overflows off the manifold during optimisation
-(catastrophic for the D=1/Mercator, leaf-heavy regime). The Poincaré ball keeps
-coordinates bounded in (−1, 1), so it stays well-conditioned at those radii.
+Why neither ambient chart survives these radii
+----------------------------------------------
+Ball, hyperboloid and polar are all exact models of H^{D+1}, so the choice is
+purely numerical — and D-Mercator is the method that exposes it, because
+low-degree leaf nodes belong at large radius (``r ≈ R̂``, which reaches ~16–20
+even for tiny graphs and ~40 on larger ones). There:
+
+- the **hyperboloid** carries a timelike coordinate ``cosh(r) ≈ 1e5``–``1e7``
+  that overflows off the manifold during optimisation (catastrophic for the
+  D=1/Mercator, leaf-heavy regime), and its distance loses the Minkowski inner
+  product to cancellation from ``r ≈ 18``;
+- the **ball** keeps coordinates bounded in (−1, 1), but its distance is capped:
+  ``geoopt`` clamps the argument of ``artanh`` at ``1 − 1e-7``, so every pair
+  further apart than ``16.811243`` returns exactly that value with an exactly
+  zero gradient. Two leaves at ``r ≈ R̂`` on opposite sides are ~32 apart and
+  land squarely on the cap — the regime this method lives in;
+- the **polar** chart stores ``r`` as a plain number and is exact at every
+  radius reached here.
+
+Hence ``representation="polar"`` is the default.
 
 The Fermi-Dirac connection probability on the exact hyperbolic distance
 reproduces the S^D model probability (Eq. 1) in the large-radius regime, since
@@ -77,7 +90,7 @@ from hypegrl.representations import (
 
 # Chart in which the Fermi-Dirac refinement runs. Polar is the default because
 # it preserves the radial coordinate at the large radii D-Mercator assigns to
-# leaves (the ball saturates at r≈12, the hyperboloid distance fails at r≈18).
+# leaves (geoopt clamps the ball at r≈12, the hyperboloid distance fails at r≈18).
 _REPRESENTATIONS = {
     "polar": PolarRepresentation,
     "exact_polar": ExactPolarRepresentation,
@@ -337,12 +350,13 @@ class DMercatorEmbedder(HyperbolicEmbedder):
         """
         Return ``(N, d)`` Poincaré ball coordinates.
 
-        Note: the ball chart cannot represent large hyperbolic radii — for
-        ``r ≳ 12`` the map ``tanh(r/2)`` saturates to the boundary, so the
-        leaf nodes D-Mercator places at ``r`` up to ~40 on larger graphs
-        collapse to a common radius here. This is a lossy visualisation /
-        interop projection; the authoritative geometry (unsaturated radius,
-        κ, angles) is :meth:`native_coordinates`. Rows follow ``nodes()`` order.
+        Note: the ball chart holds large hyperbolic radii poorly — ``tanh(r/2)``
+        crowds against ``1`` (``1 − 4e-9`` at ``r = 20``) and the conversion
+        clamps outright at ``r ≈ 28.32``, so the leaf nodes D-Mercator places at
+        ``r`` up to ~40 on larger graphs are indistinguishable at the rim here.
+        This is a lossy visualisation / interop projection; the authoritative
+        geometry (full radius, κ, angles) is :meth:`native_coordinates`. Rows
+        follow ``nodes()`` order.
         """
         if self._X is None:
             raise RuntimeError("Call fit() before embeddings().")

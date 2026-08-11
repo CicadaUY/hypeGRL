@@ -44,13 +44,13 @@ class PrecomputedEmbedder(HyperbolicEmbedder):
       it always falls back to its generic global ``r``/``t`` model rather
       than attempting to call the nonexistent ``decode()``.
     - :meth:`embeddings_representation` stays at the base-class default of
-      ``None`` (no ``Representation`` was built), so downstream distance
-      computations use the Poincaré-ball manifold on :meth:`embeddings`
-      directly — exact for ``‖x‖ ≲ tanh(6) ≈ 1 − 5e-6`` (radius ≲ 12) and
-      increasingly lossy closer to the boundary. If you need exactness at
-      larger radii, sample in another chart and convert with
-      :mod:`hypegrl.manifolds.poincare` / :mod:`hypegrl.manifolds.lorentz`
-      before wrapping.
+      ``None`` (no ``Representation`` was built), so downstream code has only
+      the ball coordinates to work from. Consumers that need distances should
+      re-chart them — ``PolarRepresentation.from_ball(emb.embeddings())`` —
+      rather than measure in the ball, whose ``geoopt`` distance is capped at
+      ``16.811243``;
+      :class:`~hypegrl.generation.fermi_dirac.FermiDiracGenerator` does this
+      for you. The coordinates themselves are faithful to ``r ≈ 28``.
 
     Examples
     --------

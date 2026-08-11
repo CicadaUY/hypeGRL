@@ -8,12 +8,14 @@ chart-agnostic geometry — fed to scikit-learn as a precomputed matrix; the
 classifier and metrics are scikit-learn's.
 
 These functions take a ``Representation``, **not** ball coordinates, on purpose:
-``embeddings()`` returns Poincaré-ball coordinates, which *saturate* past
-``r ≈ 12`` (``tanh(r/2) → 1`` maps every large radius onto the boundary). Distances
-recomputed from those coordinates are silently wrong for large-radius embeddings —
-losing radial resolution and, far enough out, scrambling the very nearest-neighbour
-ordering this classifier depends on — with no error raised. The representation
-preserves the exact radius, so pass ``embedder.embeddings_representation()``.
+``embeddings()`` returns Poincaré-ball coordinates, and a distance recomputed
+from those through ``geoopt`` is capped at ``16.811243`` — every pair further
+apart than that returns exactly the same number (see
+:class:`~hypegrl.representations.ball.BallRepresentation`). For a large-radius
+embedding this silently flattens the far end of the distance matrix and
+scrambles the very nearest-neighbour ordering this classifier depends on, with
+no error raised. The representation preserves the exact geometry, so pass
+``embedder.embeddings_representation()``.
 """
 from typing import Optional
 

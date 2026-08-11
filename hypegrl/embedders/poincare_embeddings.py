@@ -662,7 +662,7 @@ class PoincareEmbeddingsEmbedder(HyperbolicEmbedder):
         X:
             ``(N, d)`` Poincaré-ball coordinates, or a fitted
             :class:`~hypegrl.representations.Representation` (whose exact
-            ``rep.dist()`` is used, avoiding ball saturation).
+            ``rep.dist()`` is used, avoiding the ball's 16.811243 distance ceiling).
 
         Returns
         -------

@@ -8,7 +8,13 @@ route through the third chart, so a large-radius point converted
 chart-limited by construction:
 
 - **polar** is lossless (``r`` a plain number, ``v`` a unit vector);
-- **ball** saturates past ``r ≈ 12`` (``tanh(r/2) → 1``);
+- **ball** is exact to ``r ≈ 28.32``, the ceiling set by the ``eps = 1e-12``
+  clamp in :func:`ball_to_polar_torch` (``2·artanh(1 − 1e-12)``); every larger
+  radius reads back as ``28.32``. Raw ``float64`` would carry ``tanh(r/2)``
+  distinct from ``1`` to ``r ≈ 38``, so this is our constant, not a precision
+  limit. Optimising *on* the ball is bounded far sooner — see
+  :class:`~hypegrl.representations.ball.BallRepresentation` for the two
+  ``geoopt`` clamps that apply there;
 - **hyperboloid** is exact to ``r ≈ 350`` (``cosh r`` overflow).
 
 A point of H^{D+1} is: ball ``X ∈ ℝ^{D+1}``; hyperboloid ``H ∈ ℝ^{D+2}``

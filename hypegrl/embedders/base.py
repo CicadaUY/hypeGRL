@@ -66,15 +66,28 @@ class HyperbolicEmbedder(ABC):
         Return the current embeddings as an ``(N, d)`` **Poincaré-ball**
         coordinate array. Must be called after :meth:`fit`.
 
-        This is the library's interchange format (the disk plotters and
-        downstream code consume ball coordinates), but the ball chart *saturates*
-        past ``r ≈ 12`` (``tanh(r/2) → 1`` maps every large radius onto the
-        boundary), so for graphs whose geometry reaches large radii the leaf
-        nodes collapse to a common radius here. For the **exact, chart-agnostic**
-        geometry prefer :meth:`embeddings_representation`, which returns the
-        fitted :class:`~hypegrl.representations.Representation` and can be read
-        out in any chart via its ``to_polar`` / ``to_ball`` / ``to_hyperboloid``
-        methods without that loss.
+        **Legacy interop only — prefer :meth:`embeddings_representation`.**
+        This method predates the ``Representation`` layer and survives because
+        the disk plotters, :mod:`hypegrl.generation` and outside code accept a
+        plain coordinate array. It is not the library's canonical geometry, and
+        the ball is not a neutral container for it:
+
+        - the ball radius ``tanh(r/2)`` crowds exponentially against ``1``
+          (``1 − 4e-9`` at ``r = 20``), so nodes at large radius are
+          indistinguishable at the rim and the array is faithful only to
+          ``r ≈ 28``;
+        - any distance recomputed from these coordinates through ``geoopt`` is
+          capped at ``16.811243``, with an exactly zero gradient past it (see
+          :class:`~hypegrl.representations.ball.BallRepresentation`). If you
+          need distances from a bare coordinate array, re-chart it first —
+          ``PolarRepresentation.from_ball(X).dist()``.
+
+        :meth:`embeddings_representation` returns the fitted
+        :class:`~hypegrl.representations.Representation` — the exact geometry in
+        the chart it was optimised in, readable in any other chart via its
+        ``to_polar`` / ``to_ball`` / ``to_hyperboloid`` methods, and carrying a
+        ``dist()`` that is exact at every radius. Use it for anything
+        quantitative; use this for plotting and interop.
         """
 
     def embeddings_representation(self):
@@ -82,8 +95,8 @@ class HyperbolicEmbedder(ABC):
         Return the fitted :class:`~hypegrl.representations.Representation` — the
         chart the embedding was optimised in, holding the *exact* geometry.
 
-        Unlike :meth:`embeddings` (Poincaré-ball coordinates, which saturate past
-        ``r ≈ 12``), the representation preserves the full hyperbolic radius and
+        Unlike :meth:`embeddings` (Poincaré-ball coordinates, whose radial
+        resolution crowds against the rim), it preserves the full radius and
         can be read out in any chart via its ``to_polar`` / ``to_ball`` /
         ``to_hyperboloid`` methods. Rows follow :meth:`nodes` order.
 
@@ -139,8 +152,8 @@ class HyperbolicEmbedder(ABC):
             :class:`~hypegrl.representations.Representation` (as returned by
             :meth:`embeddings_representation`). Passing the representation decodes
             the *exact* geometry — for distance-based decoders it uses
-            ``rep.dist()`` directly, avoiding the ball saturation that
-            coordinates suffer past ``r ≈ 12``.
+            ``rep.dist()`` directly, avoiding the ``16.811243`` ceiling a
+            distance recomputed from ball coordinates hits.
 
         Returns
         -------

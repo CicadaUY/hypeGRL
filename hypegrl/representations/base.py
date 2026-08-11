@@ -164,8 +164,17 @@ class Representation(ABC):
 
     def to_ball(self) -> torch.Tensor:
         """
-        Detached Poincaré-ball coordinates (saturates past ``r ≈ 12`` — for
-        plotting / interop, not gradients; see the class differentiability note).
+        Detached Poincaré-ball coordinates — for plotting / interop, not
+        gradients (see the class differentiability note).
+
+        Exact to ``r ≈ 28.32``, the clamp in
+        :mod:`hypegrl.manifolds.conversions`; every larger radius reads back as
+        ``28.32``. Well before that the ball radius crowds against ``1``
+        (``1 − 4e-9`` at ``r = 20``), so large radii are visually
+        indistinguishable on a disk and any distance recomputed from these
+        coordinates through ``geoopt`` hits its ``16.811243`` ceiling
+        (:class:`~hypegrl.representations.ball.BallRepresentation`). Prefer
+        :meth:`to_polar` wherever the radius carries meaning.
         """
         return polar_to_ball_torch(*self.to_polar())
 

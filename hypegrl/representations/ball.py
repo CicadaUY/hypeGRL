@@ -3,10 +3,32 @@
 Poincaré-ball representation: optimise on ``geoopt.PoincareBall``.
 
 A baseline chart, included for the representation comparison. Faithful at
-moderate radius, but its coordinates saturate past ``r ≈ 12`` (``tanh(r/2) → 1``
-maps every large radius to the boundary), so it collapses the radial coordinate
-of leaf-heavy / large graphs. Distances use ``POINCARE_BALL.dist`` (the exact
-ball geodesic distance).
+moderate radius, and bounded above by two ``geoopt`` safety constants — *not*
+by ``float64``:
+
+- **The stored coordinate is clamped.** ``geoopt``'s ``project`` caps the norm at
+  ``1 − eps`` (``eps = 1e-5`` in double precision), i.e. a hyperbolic radius
+  ``r ≤ 2·artanh(1 − 1e-5) ≈ 12.21``. ``BallRepresentation`` applies it on
+  construction and ``RiemannianAdam`` re-applies it at every step, so a warm
+  start beyond that shell is squashed onto it and the radial coordinate of
+  leaf-heavy / large graphs collapses.
+- **The distance has a hard ceiling.** ``POINCARE_BALL.dist`` is
+  ``2·artanh(‖−x ⊕ y‖)`` and ``geoopt``'s ``artanh`` clamps its argument to
+  ``1 − 1e-7``, so any pair further apart than ``2·artanh(1 − 1e-7) =
+  16.811243`` returns *exactly* that value, with an exactly zero gradient.
+  This is a ceiling on the **pair separation**, so it binds well inside the
+  coordinate clamp: two nodes at ``r = 8.41`` in opposite directions are already
+  past it. It is the limit that bites first in practice.
+
+Away from that ceiling the chart stays accurate — a pair one unit apart is
+recovered to a relative error of ``2e-11`` at ``r = 8`` and ``8e-8`` at
+``r = 12`` — so the failure mode is the two clamps, not gradual precision loss.
+
+Both constants are *stricter* than double precision itself: in raw ``float64``
+the ball coordinate ``tanh(r/2)`` stays distinct from ``1`` until ``r ≈ 38``
+(Mishne, Wan, Wang & Yang 2023, arXiv:2211.00181, §3). The exact converters in
+:mod:`hypegrl.manifolds.conversions` carry their own, looser limit, so a
+``to_ball()`` readout is not bounded by the two constants above.
 """
 
 from __future__ import annotations

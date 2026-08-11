@@ -72,7 +72,7 @@ from hypegrl.representations import (
 
 # Chart in which the gradient refinement runs. HyperMap's Fermi-Dirac NLL is a
 # function of the pairwise distance only, so the chart is neutral; polar is the
-# default (exact at all radii, where the ball saturates past r≈12). The greedy
+# default (exact at all radii, where geoopt clamps the ball at r≈12). The greedy
 # init still produces its 2D Poincaré-ball warm start regardless.
 _REPRESENTATIONS = {
     "polar": PolarRepresentation,
@@ -567,7 +567,8 @@ class HyperMapEmbedder(HyperbolicEmbedder):
         X:
             ``(N, d)`` Poincaré-ball coordinates, or a fitted
             :class:`~hypegrl.representations.Representation` (whose exact
-            ``rep.dist()`` is used, avoiding ball saturation). Rows must be in
+            ``rep.dist()`` is used, avoiding the ball's 16.811243 distance ceiling).
+            Rows must be in
             :meth:`nodes` (degree-descending) order to match the per-node ``R``.
 
         Returns

@@ -59,7 +59,7 @@ from hypegrl.representations import (
 
 # Chart in which the Step-2 gradient refinement runs. HYDRA+'s stress loss is a
 # function of the pairwise distance only, so the chart is neutral — polar is the
-# default (exact at all radii; the ball saturates past r≈12), matching the other
+# default (exact at all radii; geoopt clamps the ball at r≈12), matching the other
 # neutral methods. The original HYDRA+ even refines on the hyperboloid; the ball
 # was only an implementation choice.
 _REPRESENTATIONS = {

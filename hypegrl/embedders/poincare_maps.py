@@ -44,7 +44,7 @@ from hypegrl.representations import (
 
 # Chart in which the refinement runs. Poincaré Maps' geometry is chart-neutral
 # (the loss is a function of the pairwise distance only), so polar is the
-# default — it is exact at all radii, where the ball saturates past r≈12.
+# default — it is exact at all radii, where geoopt clamps the ball at r≈12.
 _REPRESENTATIONS = {
     "polar": PolarRepresentation,
     "exact_polar": ExactPolarRepresentation,
@@ -378,7 +378,7 @@ class PoincareMapsEmbedder(HyperbolicEmbedder):
         X:
             ``(N, d)`` Poincaré-ball coordinates, or a fitted
             :class:`~hypegrl.representations.Representation` (whose exact
-            ``rep.dist()`` is used, avoiding ball saturation).
+            ``rep.dist()`` is used, avoiding the ball's 16.811243 distance ceiling).
 
         Returns
         -------
