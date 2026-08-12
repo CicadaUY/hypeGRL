@@ -29,7 +29,37 @@ _TINY = 1e-15
 
 
 class PolarRepresentation(Representation):
-    """Embedding stored as ``(u, v)`` with ``r = softplus(u)``, ``v ∈ S^D``."""
+    """
+    Embedding stored as ``(u, v)`` with ``r = softplus(u)``, ``v ∈ S^D``.
+
+    The radius lives on ``geoopt.Euclidean`` and the direction on
+    ``geoopt.Sphere``, so the pair carries the *product* metric
+    ``dr² + ⟨dv, dv⟩`` rather than the true ``dr² + sinh²(r)·g_{S^D}``. This is
+    the default chart: it is exact at every radius and, unlike the exact metric,
+    it keeps moving the angles when the radius is large.
+
+    **Its one structural weakness is a spread of radii, and no ``lr`` fixes it.**
+    ``RiemannianAdam`` normalises the step by the gradient's own magnitude, and
+    the direction is pooled into a single scalar per node, so *every* node turns
+    by ``‖δv‖ ≈ lr`` per step whatever its radius. The distance a node actually
+    travels is ``sinh(r)·‖δv‖``, so two nodes at radii ``r_max`` and ``r_min``
+    move by amounts in the ratio ``sinh(r_max)/sinh(r_min) ≈ e^(r_max − r_min)``
+    from the same ``lr``. Pick ``lr`` for the outer nodes and the inner ones
+    barely move; pick it for the inner ones and the outer ones are flung across
+    the space. Tuning cannot resolve this, because it is a property of the
+    *spread* rather than of the magnitude — a graph whose nodes all sit at one
+    radius is unaffected however large that radius is.
+
+    In practice the relevant spread is over the radii that carry the loss, not
+    the extremes: the outermost nodes are typically low-degree and contribute
+    little, so displacing them costs little. The usable ``lr`` therefore depends
+    on the graph, and a large-radius graph generally needs a much smaller one
+    than the default.
+
+    A second, milder consequence of the same fact: since a node turns by ``≈ lr``
+    per step, any node whose required angular correction is *below* ``lr``
+    overshoots it immediately. The chart's angular resolution is ``lr``.
+    """
 
     def __init__(self, u: torch.Tensor, v: torch.Tensor, device: str = "cpu"):
         dev = torch.device(device)
@@ -75,6 +105,21 @@ class ExactPolarRepresentation(Representation):
     is that its effective step size drifts with radius under a shared ``lr``
     (under-driving at small ``r``, overshooting at large ``r``), whereas here the
     geometric step length is ``≈ lr`` at every radius.
+
+    **That step length is a total budget, and at large radius the angle cannot
+    afford it.** Turning by ``δθ`` at radius ``r`` costs an arc of ``sinh(r)·δθ``,
+    so holding the step at ``≈ lr`` forces the angular coordinate to change by
+    ``≈ lr/sinh(r)`` — a factor that vanishes exponentially. The radial direction
+    carries no such penalty, so a run here moves almost purely radially once
+    ``r`` is large. It follows that this chart is a poor choice for *refining* an
+    embedding that is already near-optimal in the radial direction: ``∂f/∂r`` is
+    then small by construction and the angular gradient is divided by
+    ``sinh²(r)``, so both components of the step are negligible and the
+    embedding barely moves. :class:`PolarRepresentation` and
+    :class:`~hypegrl.representations.tangent.TangentRepresentation` have no such
+    ceiling on angular motion and do move it. Prefer this chart at moderate
+    radius, where its interpretable ``lr`` is a real advantage, and not as a
+    large-radius refiner.
 
     The radius is stored **directly** (no softplus): the manifold keeps ``r ≥ 0``
     itself — its exponential map yields ``r ≥ 0`` by construction and flips ``v``

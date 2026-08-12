@@ -32,9 +32,16 @@ angular *coordinate* at a rate set by ``lr`` alone, regardless of radius. Same
 space, same minima, very different paths — and the effect is unbounded, not a
 constant factor.
 
+The effect is strong enough to stall a run outright. A chart under the exact
+metric changes the angular coordinate by only ``≈ lr/sinh(r)``; if the starting
+point is also near-optimal radially — as a warm start from a method's own
+initialisation typically is — then ``∂f/∂r`` is small too, and *neither*
+component of the step moves the embedding appreciably.
+
 Consequences: a shared ``lr`` does **not** mean a shared step size across
 charts, so comparing charts at one ``lr`` compares nothing. Every comparison
-needs a per-chart ``lr`` sweep, read at each chart's own optimum.
+needs a per-chart ``lr`` sweep, read at each chart's own optimum. And no ``lr``
+rescues the stall above, since it scales both components alike.
 
 What each chart does, in this library
 -------------------------------------
