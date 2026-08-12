@@ -9,3 +9,13 @@ Hydra) is documented on its own page under **Embedding methods**.
 .. automodule:: hypegrl.embedders.base
    :members:
    :show-inheritance:
+
+Precomputed embeddings
+----------------------
+
+Wraps a coordinate matrix that was not produced by fitting one of the
+library's methods, so it can be passed anywhere a fitted embedder is expected.
+
+.. automodule:: hypegrl.embedders.precomputed
+   :members:
+   :show-inheritance:

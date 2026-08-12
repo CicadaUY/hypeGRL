@@ -25,11 +25,26 @@ Encoder-decoder instantiation
 
 Unknown edges
 -------------
-...
+Neither method supports joint optimization of unknown edge weights, for two
+different reasons.
+
+``HydraEmbedder`` is closed-form: the embedding is read off an
+eigendecomposition, so there is no optimizer in which a free variable could
+live.
+
+``HydraPlusEmbedder`` *is* gradient-based, but its structural target
+:math:`s(\mathbf{A})` is the shortest-path distance matrix — a combinatorial
+(minimum-over-paths) function of the adjacency. No gradient flows back through
+it to an unknown weight, however the coordinates are optimized.
+
+Both therefore zero-impute the unknown entries and emit a warning.
 
 API reference
 -------------
 .. autoclass:: hypegrl.embedders.hydra.HydraEmbedder
+   :members:
+
+.. autoclass:: hypegrl.embedders.hydra_plus.HydraPlusEmbedder
    :members:
 
 

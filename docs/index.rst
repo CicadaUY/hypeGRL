@@ -43,8 +43,10 @@ hypeGRL
    :caption: API reference
 
    api/embedders
-   api/unknown_edges
-   api/streaming
-   api/generation
-   api/visualization
+   api/representations
    api/manifolds
+   api/inference
+   api/generation
+   api/evaluation
+   api/visualization
+   api/streaming

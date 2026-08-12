@@ -199,7 +199,7 @@ class WarpedPolarHyperboloid(geoopt.Manifold):
         The hyperboloid geodesic through ``Φ(r,v) = (cosh r, sinh r·v)`` read
         back in polar coordinates gives ``cosh r₁`` and ``sinh r₁·v₁`` as
         combinations of ``cosh r₀``/``sinh r₀``. Dividing both by ``cosh r₀``
-        leaves only ``tanh r₀``-weighted ``O(1)`` quantities,
+        leaves only ``tanh r₀``-weighted ``O(1)`` quantities::
 
             C = cosh s + sinhc(s)·u_r·tanh r₀              ( = cosh r₁ / cosh r₀ )
             n = (cosh s·tanh r₀ + sinhc(s)·u_r)·v₀

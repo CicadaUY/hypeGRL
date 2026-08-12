@@ -26,6 +26,10 @@ autodoc_default_options = {
 
 napoleon_numpy_docstring = True
 napoleon_google_docstring = False
+# Render "Attributes" inline in the class body. Without this, a documented
+# dataclass field is emitted both by napoleon and by autodoc, and Sphinx warns
+# about the duplicate.
+napoleon_use_ivar = True
 
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
