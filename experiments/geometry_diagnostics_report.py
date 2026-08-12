@@ -24,9 +24,53 @@ import networkx as nx
 REPO = str(Path(__file__).resolve().parents[1])
 sys.path.insert(0, REPO)
 
-from geometry_diagnostics import diagnose, format_report
+from geometry_diagnostics import diagnose, format_report  # noqa: E402
 
 RESULTS = Path(REPO) / "experiments" / "results"
+
+
+def _patch_aiohttp_trust_env() -> None:
+    """
+    Make aiohttp (used internally by fsspec's ``HTTPFileSystem``, which
+    recent ``torch_geometric`` versions route dataset downloads through --
+    ``Planetoid``/``PPI``/``WordNet18RR``/``PolBlogs``/``Airports`` here --
+    honour ``HTTP_PROXY``/``HTTPS_PROXY`` environment variables.
+
+    ``aiohttp.ClientSession`` defaults to ``trust_env=False``: unlike
+    ``requests``, ``urllib``, ``curl``, ``pip``, or ``git``, it silently
+    ignores proxy env vars unless ``trust_env=True`` is passed explicitly.
+    PyG's dataset classes don't expose a way to pass that through, so
+    behind a proxy their downloads can hang and eventually raise
+    ``fsspec.exceptions.FSTimeoutError`` even when the same proxy works
+    fine for pip/git and for the plain-``urllib`` SNAP/Disease loaders
+    elsewhere in this file (those aren't affected -- ``urllib`` reads proxy
+    env vars by default).
+
+    Patches ``aiohttp.ClientSession.__init__`` once, at import time, to
+    default ``trust_env`` to ``True`` (an explicit ``trust_env=False`` from
+    a caller would still be respected via ``setdefault``). A no-op if
+    ``aiohttp`` isn't installed (e.g. ``torch_geometric`` itself isn't) or
+    if it's already been patched (e.g. this module reloaded).
+    """
+    try:
+        import aiohttp
+    except ImportError:
+        return
+
+    if getattr(aiohttp.ClientSession.__init__, "_trust_env_patched", False):
+        return
+
+    _original_init = aiohttp.ClientSession.__init__
+
+    def _patched_init(self, *args, **kwargs):
+        kwargs.setdefault("trust_env", True)
+        _original_init(self, *args, **kwargs)
+
+    _patched_init._trust_env_patched = True
+    aiohttp.ClientSession.__init__ = _patched_init
+
+
+_patch_aiohttp_trust_env()
 
 
 def _largest_component(G: nx.Graph) -> nx.Graph:
@@ -81,12 +125,33 @@ def _largest_component(G: nx.Graph) -> nx.Graph:
 #   average clustering coefficient at 0.47 despite a mean degree far below
 #   its node count -- close to the PNAS sparse-and-clustered regime this
 #   module checks for directly.
+# - ``disease``: Chami et al.'s (2019) synthetic "Disease" tree, built by
+#   simulating an SIR epidemic-spreading process over a random tree, with
+#   node labels for infection status. HGCN's own purpose-built stress test
+#   for literal hierarchical structure -- alongside Cora/PubMed/Airport
+#   (already covered above), one of the three domains their paper reports
+#   results on, and reportedly their widest hyperbolic-vs-Euclidean gap.
+# - ``ppi``: one tissue's human protein-protein interaction network
+#   (Zitnik & Leskovec, 2017) -- the third of HGCN's three real-network
+#   domains, alongside citation networks and Airport.
+# - ``wordnet18rr``: WN18RR, the WordNet lexical-relation knowledge graph
+#   (Dettmers et al., 2018), edge direction and relation types dropped.
+#   The standard benchmark for the *hyperbolic knowledge-graph embedding*
+#   line of work (Balazevic et al. 2019 "MuRP"; Chami et al. 2020
+#   "Low-Dimensional Hyperbolic Knowledge Graph Embeddings") -- distinct
+#   from, and a useful contrast to, ``wordnet/mammal`` above: same source
+#   lexicon, a genuinely different relation structure (synonymy, meronymy,
+#   antonymy, ... instead of a single is-a hierarchy).
 # ----------------------------------------------------------------------
 
 _SNAP_URLS = {
     "internet_as": "https://snap.stanford.edu/data/as20000102.txt.gz",
     "arxiv_collab": "https://snap.stanford.edu/data/ca-HepTh.txt.gz",
 }
+_DISEASE_URL = (
+    "https://raw.githubusercontent.com/HazyResearch/hgcn/master/"
+    "data/disease_nc/disease_nc.edges.csv"
+)
 
 
 def _download(url: str, path: Path) -> Path:
@@ -222,6 +287,77 @@ def karate_club_graph() -> nx.Graph:
     return nx.karate_club_graph()
 
 
+def disease_graph(cache_dir: Optional[str] = None) -> nx.Graph:
+    """
+    Chami et al.'s (2019, HGCN) synthetic "Disease" tree. See the
+    "Additional literature datasets" note above this section.
+
+    Downloads the edge list from HGCN's own GitHub repository
+    (HazyResearch/hgcn) -- the same repo the citation-network loader above
+    traces back to.
+
+    Note
+    ----
+    The exact file layout of HGCN's ``data/disease_nc/`` directory
+    (``disease_nc.edges.csv``, comma-separated node-id pairs) is inferred
+    from that repository's well-known, widely-reused ``data_utils.py``
+    loading code, not independently re-verified against a live download in
+    this session -- if the format has since changed this will fail loudly
+    (a parse error naming the bad line) rather than silently return
+    something wrong. Worth confirming the first time you run it.
+    """
+    directory = Path(cache_dir) if cache_dir is not None else Path("./data/disease")
+    path = _download(_DISEASE_URL, directory / "disease_nc.edges.csv")
+    G = nx.Graph()
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            u, v = line.split(",")[:2]
+            G.add_edge(int(u), int(v))
+    return G
+
+
+def ppi_graph(cache_dir: Optional[str] = None, graph_index: int = 0) -> nx.Graph:
+    """
+    One human tissue's protein-protein interaction network from the PPI
+    dataset (Zitnik & Leskovec, 2017), via PyTorch Geometric. See the
+    "Additional literature datasets" note above this section.
+
+    PPI ships as ~20 separate per-tissue graphs, not one connected network
+    (different tissues' interactomes, not naturally a single graph);
+    ``graph_index`` picks which one (default: the first of the training
+    split).
+    """
+    from torch_geometric.datasets import PPI
+
+    root = str(cache_dir) if cache_dir is not None else "./data/ppi"
+    dataset = PPI(root=root, split="train")
+    data = dataset[graph_index]
+    G = nx.Graph()
+    G.add_nodes_from(range(data.num_nodes))
+    G.add_edges_from(data.edge_index.numpy().T.tolist())
+    return G
+
+
+def wordnet18rr_graph(cache_dir: Optional[str] = None) -> nx.Graph:
+    """
+    WN18RR: the WordNet lexical-relation knowledge graph (Dettmers et al.,
+    2018), edge direction and the 11 relation types both dropped, via
+    PyTorch Geometric. See the "Additional literature datasets" note above
+    this section.
+    """
+    from torch_geometric.datasets import WordNet18RR
+
+    root = str(cache_dir) if cache_dir is not None else "./data/wordnet18rr"
+    data = WordNet18RR(root=root)[0]
+    G = nx.Graph()
+    G.add_nodes_from(range(data.num_nodes))
+    G.add_edges_from(data.edge_index.numpy().T.tolist())
+    return G
+
+
 # ----------------------------------------------------------------------
 # Dataset registry: name -> zero-arg loader returning nx.Graph (or
 # (nx.Graph, labels), in which case only the graph is used here).
@@ -258,6 +394,9 @@ def _dataset_loaders() -> dict:
         )
     loaders["internet_as"] = lambda: internet_as_graph()
     loaders["arxiv_collab"] = lambda: arxiv_collaboration_graph()
+    loaders["disease"] = lambda: disease_graph()
+    loaders["ppi"] = lambda: ppi_graph()
+    loaders["wordnet18rr"] = lambda: wordnet18rr_graph()
     return loaders
 
 
@@ -290,7 +429,7 @@ def run_report(
                 n_ricci_edges=n_ricci_edges, seed=seed,
             )
             print(format_report(name, reports[name]))
-        except Exception as exc:  
+        except Exception as exc:  # noqa: BLE001 -- keep the report going
             reason = f"{type(exc).__name__}: {exc}"
             skipped[name] = reason
             print(f"  SKIPPED ({reason})\n")
