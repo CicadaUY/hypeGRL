@@ -65,6 +65,15 @@ def _public_modules() -> list[str]:
     return public
 
 
+def _methods_page_classes() -> list[str]:
+    """Embedder classes given a dedicated page under ``docs/methods/``."""
+    classes = []
+    for rst in sorted((DOCS / "methods").glob("*.rst")):
+        found = AUTODOC.findall(rst.read_text())
+        classes += [target for kind, target in found if kind == "class"]
+    return classes
+
+
 @pytest.mark.parametrize("module", _public_modules())
 def test_public_module_is_documented(module):
     assert module in _documented_modules(), (
@@ -72,4 +81,20 @@ def test_public_module_is_documented(module):
         f"absent from the rendered documentation. Add an automodule directive "
         f"(or an autoclass for its main class) to the matching page under "
         f"docs/api/."
+    )
+
+
+@pytest.mark.parametrize("cls", _methods_page_classes())
+def test_embedder_is_listed_in_the_api_summary(cls):
+    """
+    The API reference's summary table is the index of the methods: it is written
+    by hand, so a new embedder reaches it only if someone adds the row. Without
+    this, a method can be fully documented on its own page and still be
+    unreachable from the API reference.
+    """
+    summary = (DOCS / "api" / "embedders.rst").read_text()
+    assert cls in summary, (
+        f"{cls} has a page under docs/methods/ but no row in the autosummary "
+        f"table in docs/api/embedders.rst, so the API reference does not list "
+        f"it. Add the dotted class name to that table."
     )

@@ -9,6 +9,7 @@ release = "0.1.0"
 
 extensions = [
     "sphinx.ext.autodoc",
+    "sphinx.ext.autosummary",    # summary tables linking to the full entries
     "sphinx.ext.napoleon",       # NumPy / Google style docstrings
     "sphinx.ext.viewcode",       # links to source
     "sphinx.ext.intersphinx",    # cross-links to torch, networkx docs
