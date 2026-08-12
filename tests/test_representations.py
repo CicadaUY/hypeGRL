@@ -156,3 +156,68 @@ def test_dist_finite_with_node_at_origin(rep_cls):
     r, v = rep.to_polar()
     assert torch.isfinite(v).all()
     assert torch.isclose(v.norm(dim=1), torch.ones(len(X))).all()
+
+
+# ---------------------------------------------------------------------------
+# The polar chart's radial reparametrisation r = softplus(u)
+# ---------------------------------------------------------------------------
+
+def _one_radial_step(rep_cls, r0, lr):
+    """One RiemannianAdam step on an outward-pulling, purely radial objective.
+
+    Two antipodal nodes at radius ``r0`` are exactly ``2·r0`` apart, so a target
+    on their distance moves the radii and nothing else. Returns ``Δr``.
+    """
+    v = np.array([[1.0, 0.0], [-1.0, 0.0]])
+    rep = rep_cls.from_polar(np.array([r0, r0]), v)
+    opt = geoopt.optim.RiemannianAdam(rep.parameters(), lr=lr, stabilize=10)
+    opt.zero_grad()
+    ((rep.dist()[0, 1] - (2.0 * r0 + 10.0)) ** 2).backward()
+    opt.step()
+    return float(rep.to_polar()[0][0]) - r0
+
+
+@pytest.mark.parametrize("r0", [0.01, 0.1, 0.5, 1.5, 3.0, 6.0])
+def test_polar_radial_step_is_tapered_by_the_softplus(r0):
+    """``r = softplus(u)`` makes the radial step ``lr·(1 − e^{−r})``, not ``lr``.
+
+    RiemannianAdam normalises the step in the *parameter* ``u`` to ``≈ lr``, so
+    the chain rule ``dr/du = σ(u) = 1 − e^{−r}`` sets the radial displacement.
+    The taper is deliberate (it keeps the optimiser from stepping across the
+    origin, where the direction is undefined); this pins its exact size.
+    """
+    lr = 1e-2
+    expected = lr * (1.0 - np.exp(-r0))
+    got = _one_radial_step(PolarRepresentation, r0, lr)
+    assert got == pytest.approx(expected, rel=0.02), (
+        f"r={r0}: radial step {got:.4e}, expected lr·(1−e^-r) = {expected:.4e}")
+
+
+def test_polar_radius_stays_positive_under_sustained_inward_pressure():
+    """The origin is asymptotic: no radius reaches 0, so none loses its gradient.
+
+    A radius parametrised directly and clamped at 0 would be pinned there for the
+    rest of the run once a step crossed it; the softplus makes that unreachable,
+    so an inward-driven node can still be driven back out.
+    """
+    v = np.array([[1.0, 0.0], [-1.0, 0.0]])
+    rep = PolarRepresentation.from_polar(np.array([2.0, 2.0]), v)
+    opt = geoopt.optim.RiemannianAdam(rep.parameters(), lr=0.1, stabilize=10)
+
+    def step(target):
+        opt.zero_grad()
+        ((rep.dist()[0, 1] - target) ** 2).backward()
+        opt.step()
+        return float(rep.to_polar()[0][0])
+
+    for _ in range(400):                      # collapse toward the origin
+        r = step(0.0)
+        assert r > 0.0, "radius reached the origin, where the gradient dies"
+    # a large collapse, but asymptotic: the taper slows the last stretch down,
+    # which is precisely the mechanism keeping the origin out of reach.
+    assert r < 0.1, f"inward pressure did not take the node inward (r={r:.3f})"
+
+    for _ in range(400):                      # and back out again
+        r_out = step(8.0)
+    assert r_out > 1.0, (
+        f"node could not be driven back out from r={r:.2e} (reached {r_out:.3f})")

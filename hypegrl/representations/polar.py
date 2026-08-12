@@ -10,8 +10,10 @@ Parameters: the direction ``v`` on ``geoopt.Sphere`` (S^D), and the radius via
 ``r = softplus(u)`` with ``u`` an unconstrained Euclidean parameter. The
 softplus keeps ``r > 0`` smoothly under RiemannianAdam — a raw clamped ``r``
 would stick at a zero gradient once it hit 0, and a raw ``r`` could step
-negative and make ``sinh r`` invalid. Model-agnostic: **no κ** (that is a
-D-Mercator readout computed from ``r`` with the model's global params).
+negative and make ``sinh r`` invalid. It is not only a positivity device: it
+also tapers the radial step near the origin, which is documented on
+:class:`PolarRepresentation`. Model-agnostic: **no κ** (that is a D-Mercator
+readout computed from ``r`` with the model's global params).
 """
 
 from __future__ import annotations
@@ -59,6 +61,25 @@ class PolarRepresentation(Representation):
     A second, milder consequence of the same fact: since a node turns by ``≈ lr``
     per step, any node whose required angular correction is *below* ``lr``
     overshoots it immediately. The chart's angular resolution is ``lr``.
+
+    **The radius is reparametrised, and that rescales the radial step.** Storing
+    ``r = softplus(u)`` and stepping ``u`` means a step ``δu`` moves the radius by
+    ``σ(u)·δu = (1 − e^{−r})·δu``. Since ``RiemannianAdam`` makes the step in
+    ``u`` about ``lr`` whatever the gradient, the radial displacement per step is
+    ``≈ lr·(1 − e^{−r})``: indistinguishable from ``lr`` beyond ``r ≈ 3`` (5%
+    short), then damped progressively below it — 22% short at ``r = 1.5``, and an
+    order of magnitude at ``r = 0.1``. Only the innermost nodes are affected, and
+    the taper dies exponentially, so this does not compound with the angular
+    spread described above.
+
+    That taper is a reason to prefer this parametrisation, not a cost of it. Both
+    obvious alternatives take full-size radial steps near the origin, which is
+    where the direction ``v`` is worst determined and where a step large enough to
+    cross zero effectively moves the node to the antipode. A radius clamped at 0
+    has no gradient below the clamp, so a node that once steps past the origin
+    stays pinned there for the rest of the run; ``r = |u|`` removes the dead zone
+    but reflects through the origin instead. The softplus makes the approach to
+    the origin asymptotic, so neither can happen.
     """
 
     def __init__(self, u: torch.Tensor, v: torch.Tensor, device: str = "cpu"):

@@ -49,12 +49,17 @@ What each chart does, in this library
 The metric column is the substantive choice; the last two columns are how
 ``geoopt`` 0.5.1 happens to implement the manifolds we build on (see below)::
 
-    chart         parameters                   metric on the angle   exact range
-    polar         Euclidean(r) + Sphere(v)     product (no warp)     r ≈ 350
-    tangent       Euclidean(z = r·v)           z-norm scaling        r ≈ 350
-    exact_polar   WarpedPolarHyperboloid       exact, sinh²r         r ≈ 350
-    ball          PoincareBall                 exact (conformal)     r ≈ 8.4
-    hyperboloid   StableLorentz                exact (Minkowski)     r ≈ 7.6
+    chart         parameters                        metric on the angle  exact range
+    polar         Euclidean(u), r = softplus(u)     product (no warp)    r ≈ 350
+                  + Sphere(v)
+    tangent       Euclidean(z = r·v)                z-norm scaling       r ≈ 350
+    exact_polar   WarpedPolarHyperboloid            exact, sinh²r        r ≈ 350
+    ball          PoincareBall                      exact (conformal)    r ≈ 8.4
+    hyperboloid   StableLorentz                     exact (Minkowski)    r ≈ 7.6
+
+The polar chart's radius is the one parameter that is not the coordinate itself:
+``r = softplus(u)`` tapers the radial step near the origin, deliberately (see
+:class:`~hypegrl.representations.polar.PolarRepresentation`).
 
 The two short ranges are set by constants rather than by ``float64``, and each
 class documents its own: the ball's is a ceiling on the *pair separation*
