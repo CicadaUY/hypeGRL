@@ -4,11 +4,87 @@ The ``Representation`` abstraction: a swappable chart in which an embedding is
 stored and optimised.
 
 Every gradient embedder's loss is a function of the pairwise hyperbolic distance
-matrix, and ball / hyperboloid / polar are isometric charts of the *same*
-H^{D+1} — they differ only in numerical conditioning. So the chart is an
-orthogonal, swappable axis. A ``Representation`` owns the optimisable parameters
-(``geoopt.ManifoldParameter`` s), computes ``dist()`` from them, and converts
-to/from any chart.
+matrix, and ball / hyperboloid / polar / tangent are all charts of the *same*
+H^{D+1}: each one's ``dist()`` is the exact hyperbolic distance, so they share
+their minima and the chart is an orthogonal, swappable axis. A
+``Representation`` owns the optimisable parameters (``geoopt.ManifoldParameter``
+s), computes ``dist()`` from them, and converts to/from any chart.
+
+Choosing a chart is not only a choice of numerical conditioning
+---------------------------------------------------------------
+
+It settles two independent questions, and only the first is about precision:
+
+1. **What the coordinates can represent** — the radius at which the stored
+   numbers stop resolving distinct points. The ball saturates, the hyperboloid
+   overflows, polar and tangent stay exact far past both. Each class documents
+   its own range.
+2. **How the optimiser moves them** — the metric under which the gradient is
+   converted into a step. This never appears in the loss, so it is invisible in
+   the objective value, yet it decides *where* the run ends up.
+
+The second is easiest to see in the angular direction. Separating two points at
+radius ``r`` by an angle ``δθ`` moves them along an arc of length
+``sinh(r)·δθ``, which grows without bound in ``r``. A chart optimised under the
+exact metric spends its step budget on that arc, so it makes very slow angular
+progress at large radius; the polar chart's product metric instead moves the
+angular *coordinate* at a rate set by ``lr`` alone, regardless of radius. Same
+space, same minima, very different paths — and the effect is unbounded, not a
+constant factor.
+
+Consequences: a shared ``lr`` does **not** mean a shared step size across
+charts, so comparing charts at one ``lr`` compares nothing. Every comparison
+needs a per-chart ``lr`` sweep, read at each chart's own optimum.
+
+What each chart does, in this library
+-------------------------------------
+
+The metric column is the substantive choice; the last two columns are how
+``geoopt`` 0.5.1 happens to implement the manifolds we build on (see below)::
+
+    chart         parameters                   metric on the angle   exact range
+    polar         Euclidean(r) + Sphere(v)     product (no warp)     r ≈ 350
+    tangent       Euclidean(z = r·v)           z-norm scaling        r ≈ 350
+    exact_polar   WarpedPolarHyperboloid       exact, sinh²r         r ≈ 350
+    ball          PoincareBall                 exact (conformal)     r ≈ 8.4
+    hyperboloid   StableLorentz                exact (Minkowski)     r ≈ 7.6
+
+The two short ranges are set by constants rather than by ``float64``, and each
+class documents its own: the ball's is a ceiling on the *pair separation*
+(``16.811243``, reached by two points at ``r = 8.4`` in opposite directions),
+and the hyperboloid's is the ``max_norm`` clamp (default ``1e3``, i.e.
+``r ≤ arcsinh(1e3) ≈ 7.6``, raisable up to the arithmetic limit ``r ≈ 18`` where
+the Minkowski inner product cancels).
+
+So ``ball``, ``hyperboloid`` and ``exact_polar`` share one metric and differ in
+representable range, while ``polar``, ``tangent`` and ``exact_polar`` share an
+effectively unlimited range and differ in metric. A comparison that varies both
+at once cannot attribute its result to either.
+
+Behaviour inherited from geoopt, not chosen here
+------------------------------------------------
+
+Two further details differ between charts. Both come from ``geoopt`` 0.5.1 as
+installed — they are not decisions of this library, and a future ``geoopt`` may
+change them, so a chart comparison is reproducible only against a pinned
+version.
+
+- **The retraction** — how a tangent step becomes a new point.
+  ``RiemannianAdam`` moves through ``retr_transp → retr``. For ``PoincareBall``
+  and ``Sphere``, ``geoopt``'s ``retr`` is the first-order projected addition
+  ``project(x + u)``, not the exponential map; ``Lorentz`` sets
+  ``retr = expmap``, and so does
+  :class:`~hypegrl.manifolds.polar.WarpedPolarHyperboloid`, which is ours.
+  ``geoopt`` also ships ``PoincareBallExact`` and ``SphereExact``, which set
+  ``retr = expmap`` — swapping those in would remove this difference and is
+  untried here.
+- **Adam's second moment** — over what unit the adaptive scale is accumulated.
+  ``RiemannianAdam`` accumulates ``manifold.component_inner``, which
+  ``Euclidean`` overrides to be *per coordinate* while every other manifold
+  used here keeps the base implementation, *one scalar per point*. So the polar
+  chart's radius is scaled per coordinate and its direction per point, whereas
+  the ball, hyperboloid and exact-polar charts get a single shared scale per
+  point.
 
 Canonical interchange coordinate: **polar** ``(r, v)`` — ``r ≥ 0`` hyperbolic
 radius, ``v ∈ S^D`` unit vector. It is the lossless hub (see

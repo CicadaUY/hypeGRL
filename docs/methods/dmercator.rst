@@ -105,18 +105,25 @@ baseline, and the hook used by the ``X_init`` equivalence tests).
 
 Implementation notes
 --------------------
-**Why the Poincaré ball and not the hyperboloid.** Both are exact charts of
-:math:`\mathbb{H}^{D+1}`, and ``geoopt.PoincareBall.dist`` is the exact
-hyperbolic distance — the choice is purely numerical. Low-degree leaf nodes
-belong at large radius (:math:`r \approx \hat{R}`, which reaches 16–20 even on
-small graphs). On the **hyperboloid** that means a timelike coordinate
-:math:`\cosh(r)\approx 10^5`–:math:`10^7`; an optimisation step that pushes two
-such nodes together loses precision in the Lorentzian inner product and sends
-the gradient to ``NaN`` — fatal in the :math:`D=1`/Mercator, leaf-heavy regime
-(it failed on most seeds of a Barabási–Albert tree). The **Poincaré ball** keeps
-coordinates in :math:`(-1,1)` and stays well-conditioned at those radii, so it
-is the manifold used for the refinement. The regression test
-``test_dmercator_robust_on_leaf_heavy_graph_d1`` guards this.
+**Why the refinement runs in the polar chart.** Low-degree leaf nodes belong at
+large radius (:math:`r \approx \hat{R}`, which reaches 16–20 even on small
+graphs), and that is where the ambient charts stop working. On the
+**hyperboloid** such a node has a timelike coordinate
+:math:`\cosh(r)\approx 10^5`–:math:`10^7`; a step that pushes two of them
+together loses precision in the Lorentzian inner product and sends the gradient
+to ``NaN`` — fatal in the :math:`D=1`/Mercator, leaf-heavy regime (it failed on
+most seeds of a Barabási–Albert tree). The **Poincaré ball** keeps coordinates
+in :math:`(-1,1)`, but that is crowding rather than safety: the stored radius
+:math:`\tanh(r/2)` is clamped well below these radii, and any pair further apart
+than :math:`16.811243` returns exactly that distance with zero gradient. The
+**polar** chart :math:`(r, v)` keeps :math:`r` an ordinary number and stays
+exact throughout, so it is the default. The regression test
+``test_dmercator_robust_on_leaf_heavy_graph_d1`` guards the leaf-heavy case.
+
+Note that this is a statement about representable range only. The charts also
+differ in the metric the optimiser steps under, which changes the path a run
+takes at large radius, so range alone does not explain a difference in fitted
+quality between them.
 
 **The D=1 reduction to Mercator.** Setting ``d=2`` gives similarity dimension
 :math:`D=1` — the original Mercator model, where :math:`\mathbb{S}^D` collapses

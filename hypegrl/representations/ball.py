@@ -29,6 +29,25 @@ the ball coordinate ``tanh(r/2)`` stays distinct from ``1`` until ``r ≈ 38``
 (Mishne, Wan, Wang & Yang 2023, arXiv:2211.00181, §3). The exact converters in
 :mod:`hypegrl.manifolds.conversions` carry their own, looser limit, so a
 ``to_ball()`` readout is not bounded by the two constants above.
+
+How the steps are taken
+-----------------------
+
+Range is only half of what a chart settles; the other half is the metric the
+optimiser steps under, and there this chart is *not* a neutral baseline.
+``RiemannianAdam`` calls ``PoincareBall.egrad2rgrad``, which divides by the
+conformal factor — the exact hyperbolic metric. That is the same choice as
+:class:`~hypegrl.representations.polar.ExactPolarRepresentation` and the
+hyperboloid, and a different one from
+:class:`~hypegrl.representations.polar.PolarRepresentation`, whose product
+metric drops the ``sinh²r`` warp. A ball-versus-polar comparison therefore
+varies the metric as well as the range.
+
+One detail comes from ``geoopt`` 0.5.1 rather than from this library:
+``PoincareBall.retr`` is the first-order projected addition ``project(x + u)``,
+not the exponential map, so the step lands slightly off the geodesic. ``geoopt``
+ships ``PoincareBallExact`` (``retr = expmap``) if that difference ever needs to
+be removed; this chart uses the plain ``PoincareBall``.
 """
 
 from __future__ import annotations
