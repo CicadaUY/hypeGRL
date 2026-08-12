@@ -18,6 +18,7 @@ import pytest
 import torch
 
 from hypegrl.embedders.hypermap import HyperMapEmbedder
+from hypegrl.embedders.poincare_embeddings import PoincareEmbeddingsEmbedder
 from hypegrl.embedders.poincare_maps import PoincareMapsEmbedder
 from hypegrl.embedders.precomputed import PrecomputedEmbedder
 from hypegrl.generation.fermi_dirac import FermiDiracGenerator
@@ -92,6 +93,50 @@ def test_probabilities_warns_when_uncalibrated():
     emb = PrecomputedEmbedder(_disk_sample(20, seed=2))
     with pytest.warns(UserWarning, match="not natively generative"):
         FermiDiracGenerator(emb).probabilities()
+
+
+def test_probabilities_do_not_overflow_at_a_sharp_cutoff():
+    """
+    A small ``t`` is the sharp-cutoff regime the model is *for*, and large
+    distances are ordinary now that they are measured through a
+    ``Representation`` rather than capped. Evaluating the logistic naively
+    overflows ``exp`` there, so the sigmoid must be computed in its stable
+    branch-selecting form: no floating-point escape, exact 0/1 limits.
+    """
+    X = _ball_coords([20.0, 20.0, 0.0], [0.0, np.pi, 0.0])
+    gen = FermiDiracGenerator(PrecomputedEmbedder(X), r=1.0, t=1e-3)
+
+    with np.errstate(over="raise", invalid="raise"):
+        P = gen.probabilities()
+
+    assert np.all(np.isfinite(P))
+    # every pair is far past r, at a cutoff 1000x sharper than the gap
+    np.testing.assert_array_equal(P, np.zeros((3, 3)))
+
+    # and the opposite limit: every pair well inside r saturates at exactly 1
+    near = FermiDiracGenerator(PrecomputedEmbedder(X * 1e-6), r=1.0, t=1e-3)
+    with np.errstate(over="raise", invalid="raise"):
+        P_near = near.probabilities()
+    np.testing.assert_array_equal(P_near, 1.0 - np.eye(3))
+
+
+def test_generative_branch_always_decodes_the_representation():
+    """
+    The generative branch has no coordinate fallback: ``is_generative()`` is
+    only ever ``True`` for embedders that build a ``Representation`` during
+    ``fit``, so the two conditions can never co-occur. Guard that invariant
+    over every generative embedder rather than carrying an unreachable branch.
+    """
+    G = _karate()
+    generative = [
+        HyperMapEmbedder(d=2, n_steps=0, log_every=0).fit(G),
+        PoincareEmbeddingsEmbedder(
+            d=2, loss="fermi_dirac", n_steps=10, log_every=0, random_state=0
+        ).fit(G),
+    ]
+    for emb in generative:
+        assert emb.is_generative()
+        assert emb.embeddings_representation() is not None
 
 
 # ---------------------------------------------------------------------------

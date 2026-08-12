@@ -41,9 +41,13 @@ class HyperbolicEmbedder(ABC):
         unknown_edges:
             Edges whose weights (or existence) are unknown. These are
             treated as free variables and jointly optimized with the
-            embeddings. Gradient-based methods route through the joint
-            optimizer; non-gradient methods (e.g. Hydra) fall back to
-            zero-imputation with a warning.
+            embeddings. Most gradient-based methods route through the joint
+            optimizer. Two kinds of method fall back to zero-imputation with
+            a warning instead: closed-form ones (Hydra), which have no
+            optimizer to carry the free variables, and gradient-based ones
+            whose structural target is a combinatorial function of the
+            adjacency (Hydra+, whose ``s(A)`` is the shortest-path matrix),
+            through which no gradient can reach the unknown weights.
         X_init:
             Initial embeddings for gradient-based methods. Either an
             ``(N, d)`` coordinate array in the method's native input chart
@@ -257,9 +261,12 @@ class HyperbolicEmbedder(ABC):
         Return ``True`` if this method supports incremental node
         addition/deletion via :meth:`update`.
 
-        Gradient-based methods support out-of-sample extension for node
-        addition by default. Non-gradient methods (Hydra+, d-Mercator)
-        require a full refit.
+        Methods that implement out-of-sample extension add a node by
+        optimizing its position alone, holding the rest fixed. The others
+        (Hydra, Hydra+, D-Mercator) require a full refit — for Hydra because
+        it is closed-form, and for the other two because their warm-start
+        pipelines (the spectral step, the κ/β inference) are whole-graph
+        computations with no single-node counterpart.
         """
         return False
 

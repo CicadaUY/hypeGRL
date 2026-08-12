@@ -5,6 +5,7 @@ from typing import Optional
 import networkx as nx
 import numpy as np
 from scipy.optimize import minimize
+from scipy.special import expit
 
 from hypegrl.embedders.precomputed import PrecomputedEmbedder
 from hypegrl.generation.base import GraphGenerator
@@ -254,10 +255,12 @@ class FermiDiracGenerator(GraphGenerator):
         """
         embedder = self.embedder
         if self.r is None and self.t is None and embedder.is_generative():
-            X = embedder.embeddings_representation()
-            if X is None:
-                X = embedder.embeddings()
-            P = np.asarray(embedder.decode(X), dtype=np.float64)
+            # Every generative embedder is gradient-based and so carries a
+            # fitted Representation; decoding it gives the exact geometry.
+            P = np.asarray(
+                embedder.decode(embedder.embeddings_representation()),
+                dtype=np.float64,
+            )
         else:
             if self.r is None or self.t is None:
                 warnings.warn(
@@ -274,7 +277,9 @@ class FermiDiracGenerator(GraphGenerator):
                 np.median(D[np.triu_indices(D.shape[0], k=1)])
             )
             t = self.t if self.t is not None else 1.0
-            P = 1.0 / (np.exp((D - r) / t) + 1.0)
+            # expit, not 1/(exp(.)+1): the exponential overflows for a sharp
+            # cutoff (small t) or a large distance, both ordinary here.
+            P = expit((r - D) / t)
 
         P = np.clip(P, 0.0, 1.0)
         np.fill_diagonal(P, 0.0)
