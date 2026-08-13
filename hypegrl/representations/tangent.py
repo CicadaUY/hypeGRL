@@ -25,6 +25,16 @@ metric (angular gradient ÷ ``sinh²r``). The Cartesian ``z`` sits between them:
 angular gradient carries a single ``1/‖z‖`` from ``∂v/∂z``, which is Mishne's point —
 the large-radius gradient decays as ``δ¹`` rather than the ball's ``δ²``, and ``z`` is
 unbounded so there is no ball saturation or hyperboloid overflow.
+
+**Not rotation-invariant.** ``RiemannianAdam`` accumulates its second moment
+through ``geoopt`` 0.5.1's ``component_inner``, which ``Euclidean`` — alone among
+the manifolds used here — defines *per coordinate*, so the update is a diagonal
+rescaling in the standard basis and does not commute with a rotation of ``z``.
+Since the loss sees only distances, a rotated copy of a configuration is the same
+problem, yet it follows a different path: the result carries an arbitrary
+dependence on the frame the warm start arrived in, which the charts whose second
+moment is one scalar per point do not. The dependence is the optimiser's, not the
+parametrisation's — plain ``RiemannianSGD`` on this chart is exactly equivariant.
 """
 
 from __future__ import annotations

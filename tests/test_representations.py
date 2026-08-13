@@ -17,6 +17,7 @@ import torch
 from hypegrl.manifolds.polar import polar_distances
 from hypegrl.representations import (
     BallRepresentation,
+    ExactPolarRepresentation,
     HyperboloidRepresentation,
     PolarRepresentation,
 )
@@ -221,3 +222,56 @@ def test_polar_radius_stays_positive_under_sustained_inward_pressure():
         r_out = step(8.0)
     assert r_out > 1.0, (
         f"node could not be driven back out from r={r:.2e} (reached {r_out:.3f})")
+
+
+# ---------------------------------------------------------------------------
+# O(d) equivariance: rotating a configuration is a no-op for the model
+# ---------------------------------------------------------------------------
+
+def _random_orthogonal(d, seed):
+    """A random O(d) matrix, via QR of a Gaussian (no scipy dependency)."""
+    Q, R = np.linalg.qr(np.random.default_rng(seed).standard_normal((d, d)))
+    return Q * np.sign(np.diag(R))            # fix QR's sign ambiguity
+
+
+def _fit_toy(rep_cls, r, V, target, rot=None, lr=1e-2, n_steps=150):
+    """Pull all pairwise distances toward ``target``, from a (rotated) start."""
+    if rot is not None:
+        V = V @ rot.T
+    rep = rep_cls.from_polar(r, V)
+    opt = geoopt.optim.RiemannianAdam(rep.parameters(), lr=lr, stabilize=10)
+    T = torch.tensor(target)
+    mask = ~torch.eye(len(r), dtype=torch.bool)
+    for _ in range(n_steps):
+        opt.zero_grad()
+        loss = ((rep.dist()[mask] - T[mask]) ** 2).mean()
+        loss.backward()
+        opt.step()
+    return loss.item()
+
+
+@pytest.mark.parametrize("rep_cls", ALL_REPS + [ExactPolarRepresentation])
+def test_optimisation_is_rotation_equivariant(rep_cls):
+    """Rotating the whole configuration must not change the loss trajectory.
+
+    Every loss in the library is a function of the pairwise distances alone, so
+    ``(r, v) -> (r, v Rᵀ)`` for ``R ∈ O(d)`` is the *same problem*. These charts
+    stay equivariant because ``RiemannianAdam`` accumulates its second moment
+    through ``component_inner``, which for their manifolds is one scalar per
+    point — a uniform rescaling, which commutes with ``R``. A per-coordinate
+    second moment would not (see
+    :class:`~hypegrl.representations.tangent.TangentRepresentation`), so this
+    guards against a ``geoopt`` change that silently made these charts behave
+    like ``Euclidean``.
+    """
+    r, V = _random_polar(30, 4, 0.5, 3.0, seed=11)
+    rng = np.random.default_rng(12)
+    target = np.triu(rng.uniform(0.5, 4.0, size=(30, 30)), 1)
+    target = target + target.T
+
+    base = _fit_toy(rep_cls, r, V, target)
+    for seed in (1, 2, 3):
+        rotated = _fit_toy(rep_cls, r, V, target, rot=_random_orthogonal(4, seed))
+        assert rotated == pytest.approx(base, rel=1e-9, abs=1e-12), (
+            f"{rep_cls.__name__}: rotating the configuration changed the loss "
+            f"{base:.12f} -> {rotated:.12f}")

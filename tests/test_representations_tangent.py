@@ -111,3 +111,59 @@ def test_embedder_accepts_the_tangent_chart():
     assert X.shape == (G.number_of_nodes(), 2)
     assert np.isfinite(X).all()
     assert emb._loss_history[-1] < emb._loss_history[0]
+
+
+# ---------------------------------------------------------------------------
+# Rotation equivariance: the documented exception
+# ---------------------------------------------------------------------------
+
+def _rotation(d, seed):
+    Q, R = np.linalg.qr(np.random.default_rng(seed).standard_normal((d, d)))
+    return Q * np.sign(np.diag(R))
+
+
+def _fit_toy(optimizer_cls, r, V, target, rot=None, n_steps=150, **kw):
+    if rot is not None:
+        V = V @ rot.T
+    rep = TangentRepresentation.from_polar(r, V)
+    opt = optimizer_cls(rep.parameters(), lr=1e-2, stabilize=10, **kw)
+    T = torch.tensor(target)
+    mask = ~torch.eye(len(r), dtype=torch.bool)
+    for _ in range(n_steps):
+        opt.zero_grad()
+        loss = ((rep.dist()[mask] - T[mask]) ** 2).mean()
+        loss.backward()
+        opt.step()
+    return loss.item()
+
+
+def test_tangent_under_adam_is_not_rotation_equivariant_but_under_sgd_it_is():
+    """The Cartesian ``z`` makes the fit depend on the coordinate frame.
+
+    ``RiemannianAdam``'s second moment is per coordinate on ``geoopt.Euclidean``,
+    so its update is a diagonal rescaling in the standard basis and does not
+    commute with a rotation — even though the loss, a function of distances
+    alone, is exactly rotation-invariant. The cause is the optimiser, not the
+    chart, so plain ``RiemannianSGD`` on the same chart *is* equivariant; pinning
+    both halves keeps the class docstring honest if ``geoopt`` changes.
+    """
+    rng = np.random.default_rng(11)
+    r = rng.uniform(0.5, 3.0, size=30)
+    V = _unit(rng, 30, 4)
+    target = np.triu(rng.uniform(0.5, 4.0, size=(30, 30)), 1)
+    target = target + target.T
+    rots = [_rotation(4, s) for s in (1, 2, 3)]
+
+    adam = [_fit_toy(geoopt.optim.RiemannianAdam, r, V, target)]
+    adam += [_fit_toy(geoopt.optim.RiemannianAdam, r, V, target, rot=R)
+             for R in rots]
+    assert max(adam) - min(adam) > 1e-4, (
+        "tangent+Adam appears rotation-equivariant; if geoopt's "
+        "Euclidean.component_inner is no longer per-coordinate, update the "
+        "TangentRepresentation docstring")
+
+    sgd = [_fit_toy(geoopt.optim.RiemannianSGD, r, V, target)]
+    sgd += [_fit_toy(geoopt.optim.RiemannianSGD, r, V, target, rot=R)
+            for R in rots]
+    assert max(sgd) - min(sgd) == pytest.approx(0.0, abs=1e-9), (
+        f"SGD should be frame-independent; spread {max(sgd) - min(sgd):.3e}")
