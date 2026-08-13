@@ -471,6 +471,7 @@ def ollivier_ricci_curvature(
 def diagnose(
     G: nx.Graph,
     n_hyperbolicity_samples: int = 20_000,
+    n_hyperbolicity_nodes: int = 5000,
     n_ricci_edges: int = 500,
     seed: Optional[int] = None,
 ) -> dict:
@@ -481,6 +482,13 @@ def diagnose(
     :func:`~experiments.graph_stats.mean_hyperbolicity` and by the
     shortest-path distances the other descriptors use); pass the largest
     connected component if it isn't.
+
+    ``n_hyperbolicity_nodes`` bounds :func:`~experiments.graph_stats.mean_hyperbolicity`'s
+    distance-matrix cost (``max_candidate_nodes`` there) the same way
+    ``n_ricci_edges`` bounds Ricci curvature's — above this many nodes,
+    hyperbolicity quadruples are drawn from a random node subsample rather
+    than the whole graph; see that function's docstring for the caveat this
+    introduces.
 
     The recommendation is a simple, transparent point score, not a fitted
     classifier — there is no ground-truth labelled dataset of "networks
@@ -506,7 +514,10 @@ def diagnose(
 
     dc = degree_and_clustering(G)
     pl = powerlaw_exponent_lib(G)
-    delta = mean_hyperbolicity(G, n_samples=n_hyperbolicity_samples, seed=seed)
+    delta = mean_hyperbolicity(
+        G, n_samples=n_hyperbolicity_samples,
+        max_candidate_nodes=n_hyperbolicity_nodes, seed=seed,
+    )
     diam = nx.diameter(G,usebounds=True) # if G.number_of_nodes() < 5000 else nx.diameter(G,usebounds=True)
     delta_norm = delta / diam # if diam else float("nan")
     ricci = ollivier_ricci_curvature(G, n_edges=n_ricci_edges, seed=seed)

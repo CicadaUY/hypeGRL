@@ -1,14 +1,15 @@
 """Run :mod:`experiments.geometry_diagnostics` across every dataset in
 :mod:`experiments.datasets`, plus a set of additional networks commonly used
-in the hyperbolic-embedding literature (see "Additional literature
-datasets" below for the rationale behind each), and print/save a
-comparison table.
+in the hyperbolic-embedding (and, for the OGB entries, the broader graph-
+embedding) literature (see "Additional literature datasets" below for the
+rationale behind each), and print/save a comparison table.
 
 Every loader is tried in turn; one that needs a dependency, local file, or
 download unavailable in the current environment (``torch_geometric`` for
-PolBlogs/Airports/citation networks, ``nltk`` + the WordNet corpus,
-network access for OpenFlights/SNAP) is reported as skipped rather than
-aborting the whole run, so this is safe to run with a partial install.
+PolBlogs/Airports/citation networks, ``ogb`` for the OGB datasets, ``nltk``
++ the WordNet corpus, network access for OpenFlights/SNAP/HGCN) is reported
+as skipped rather than aborting the whole run, so this is safe to run with
+a partial install.
 
 Run:
     python experiments/geometry_diagnostics_report.py
@@ -142,6 +143,25 @@ def _largest_component(G: nx.Graph) -> nx.Graph:
 #   from, and a useful contrast to, ``wordnet/mammal`` above: same source
 #   lexicon, a genuinely different relation structure (synonymy, meronymy,
 #   antonymy, ... instead of a single is-a hierarchy).
+# - ``ogb/arxiv``: ogbn-arxiv (Hu et al., 2020, "Open Graph Benchmark"),
+#   169,343 nodes. Not from the hyperbolic-embedding literature
+#   specifically -- it's the closest thing graph ML has to a default
+#   "medium-large" node-classification benchmark today, precisely *because*
+#   Cora/CiteSeer/PubMed (2.7k-20k nodes) are considered too small to
+#   separate methods reliably; several papers explicitly justify choosing
+#   it on those grounds. A natural larger sibling to the citation/* trio
+#   above, and worth checking whether the diagnosis (and any embedding
+#   method's relative ranking) holds up at this scale.
+# - ``ogb/collab``: ogbl-collab (Hu et al., 2020), 235,868-node author
+#   collaboration network. From OGB's *link prediction* track specifically
+#   -- link prediction is the task embedding papers (hyperbolic or not)
+#   most often evaluate on, so this is closer to those papers' actual
+#   evaluation setting than a node-classification network repurposed for
+#   it.
+# - ``ogb/ddi``: ogbl-ddi (Hu et al., 2020), a drug-drug interaction
+#   network -- only 4,267 nodes but ~1.3M edges (mean degree ~500+): an
+#   extremely dense contrast case, and (unlike the two above) small enough
+#   to be an easy addition rather than a scale stress-test.
 # ----------------------------------------------------------------------
 
 _SNAP_URLS = {
@@ -358,6 +378,77 @@ def wordnet18rr_graph(cache_dir: Optional[str] = None) -> nx.Graph:
     return G
 
 
+def _ogb_safe_globals():
+    """
+    Classes that need allow-listing to unpickle an OGB-cached
+    ``torch_geometric`` ``Data`` object under PyTorch 2.6+'s
+    ``weights_only=True`` default ``torch.load``.
+
+    ``ogb``'s ``PygNodePropPredDataset``/``PygLinkPropPredDataset`` cache
+    their processed graph as a single collated ``Data`` object, saved via
+    plain ``torch.save``/pickle. Its ``_store`` is a ``GlobalStorage``, and
+    the ``FeatureStore``/``GraphStore`` protocol ``Data`` implements
+    attaches lists of ``DataTensorAttr``/``DataEdgeAttr`` -- all
+    ``torch_geometric`` classes, none on ``torch``'s default safe-globals
+    allowlist, so PyTorch 2.6's ``weights_only=True`` unpickler rejects them
+    one at a time (``Unsupported global: GLOBAL
+    torch_geometric.data.data.DataEdgeAttr``). Neither ``ogb`` nor (at the
+    time of writing) ``torch_geometric`` have shipped a fix upstream.
+
+    Allow-listing exactly these four classes -- rather than disabling
+    ``weights_only`` altogether -- keeps the unpickler restricted to
+    ``torch_geometric``'s own data-container types; it still refuses to
+    execute arbitrary callables from the pickle.
+    """
+    from torch_geometric.data import Data
+    from torch_geometric.data.data import DataEdgeAttr, DataTensorAttr
+    from torch_geometric.data.storage import GlobalStorage
+
+    return [Data, DataEdgeAttr, DataTensorAttr, GlobalStorage]
+
+
+def ogb_node_graph(name: str, cache_dir: Optional[str] = None) -> nx.Graph:
+    """
+    A node-property-prediction OGB dataset (e.g. ``"ogbn-arxiv"``), edge
+    direction dropped, via the ``ogb`` package's PyG wrapper. See the
+    "Additional literature datasets" note above this section.
+
+    Requires the separate ``ogb`` package (``pip install ogb``; itself
+    built on ``torch_geometric``, already a dependency here).
+    """
+    import torch
+    from ogb.nodeproppred import PygNodePropPredDataset
+
+    root = str(cache_dir) if cache_dir is not None else f"./data/{name}"
+    with torch.serialization.safe_globals(_ogb_safe_globals()):
+        data = PygNodePropPredDataset(name=name, root=root)[0]
+    G = nx.Graph()
+    G.add_nodes_from(range(data.num_nodes))
+    G.add_edges_from(data.edge_index.numpy().T.tolist())
+    return G
+
+
+def ogb_link_graph(name: str, cache_dir: Optional[str] = None) -> nx.Graph:
+    """
+    A link-property-prediction OGB dataset (e.g. ``"ogbl-collab"``), via the
+    ``ogb`` package's PyG wrapper. See the "Additional literature datasets"
+    note above this section.
+
+    Requires the separate ``ogb`` package (``pip install ogb``; itself
+    built on ``torch_geometric``, already a dependency here).
+    """
+    import torch
+    from ogb.linkproppred import PygLinkPropPredDataset
+
+    root = str(cache_dir) if cache_dir is not None else f"./data/{name}"
+    with torch.serialization.safe_globals(_ogb_safe_globals()):
+        data = PygLinkPropPredDataset(name=name, root=root)[0]
+    G = nx.Graph()
+    G.add_nodes_from(range(data.num_nodes))
+    G.add_edges_from(data.edge_index.numpy().T.tolist())
+    return G
+
+
 # ----------------------------------------------------------------------
 # Dataset registry: name -> zero-arg loader returning nx.Graph (or
 # (nx.Graph, labels), in which case only the graph is used here).
@@ -397,12 +488,16 @@ def _dataset_loaders() -> dict:
     loaders["disease"] = lambda: disease_graph()
     loaders["ppi"] = lambda: ppi_graph()
     loaders["wordnet18rr"] = lambda: wordnet18rr_graph()
+    loaders["ogb/arxiv"] = lambda: ogb_node_graph("ogbn-arxiv")
+    loaders["ogb/collab"] = lambda: ogb_link_graph("ogbl-collab")
+    loaders["ogb/ddi"] = lambda: ogb_link_graph("ogbl-ddi")
     return loaders
 
 
 def run_report(
     datasets: Optional[list] = None,
     n_hyperbolicity_samples: int = 20_000,
+    n_hyperbolicity_nodes: int = 5000,
     n_ricci_edges: int = 500,
     seed: int = 0,
 ) -> dict:
@@ -426,6 +521,7 @@ def run_report(
             G = _largest_component(G)
             reports[name] = diagnose(
                 G, n_hyperbolicity_samples=n_hyperbolicity_samples,
+                n_hyperbolicity_nodes=n_hyperbolicity_nodes,
                 n_ricci_edges=n_ricci_edges, seed=seed,
             )
             print(format_report(name, reports[name]))
