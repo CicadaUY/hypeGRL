@@ -1,9 +1,11 @@
 """Tests for the experiments/ reproduction helpers (not part of the library)."""
 import networkx as nx
+import numpy as np
 import pytest
 
 from experiments.datasets import balanced_tree_graph, single_cell_graph
 from experiments.graph_stats import _distance_matrix, mean_hyperbolicity
+from experiments.ogbl_ddi_link_prediction import _score_edges
 
 
 def test_tree_is_zero_hyperbolic():
@@ -83,3 +85,15 @@ def test_single_cell_graph_matches_paper(name, n, m, diam):
     u, v, data = next(iter(G.edges(data=True)))
     assert data["weight"] > 0
     assert all("label" in d for _, d in G.nodes(data=True))
+
+
+# ----------------------------------------------------------------------
+# OGB link prediction
+# ----------------------------------------------------------------------
+
+
+def test_score_edges_reads_distance_matrix():
+    D = np.array([[0.0, 1.0, 5.0], [1.0, 0.0, 2.0], [5.0, 2.0, 0.0]])
+    edges = np.array([[0, 1], [1, 2]])
+    scores = _score_edges(D, edges)
+    np.testing.assert_allclose(scores, [-1.0, -2.0])
