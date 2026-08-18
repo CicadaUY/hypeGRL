@@ -73,9 +73,10 @@ def evaluate_split(D: np.ndarray, split: dict, evaluator, key: str) -> dict:
 
 def run(
     d: int = 10,
-    n_steps: int = 500,
+    n_steps: int = 1000,
     seed: int = 0,
     root: str = "./data/ogbl-ddi",
+    device: str = "cuda",
 ) -> dict:
     from ogb.linkproppred import Evaluator
 
@@ -83,7 +84,7 @@ def run(
     print(f"ogbl-ddi training graph: {G.number_of_nodes()} nodes, "
           f"{G.number_of_edges()} edges")
 
-    embedder = PoincareEmbeddingsEmbedder(d=d, n_steps=n_steps, random_state=seed)
+    embedder = PoincareEmbeddingsEmbedder(d=d, n_steps=n_steps, random_state=seed, device=device)
     t0 = time.perf_counter()
     embedder.fit(G)
     fit_time = time.perf_counter() - t0
