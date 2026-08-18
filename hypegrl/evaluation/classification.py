@@ -20,6 +20,7 @@ no error raised. The representation preserves the exact geometry, so pass
 from typing import Optional
 
 import numpy as np
+import torch
 from sklearn.metrics import accuracy_score, f1_score
 from sklearn.model_selection import train_test_split
 from sklearn.neighbors import KNeighborsClassifier
@@ -45,7 +46,8 @@ def pairwise_distance_matrix(representation: Representation) -> np.ndarray:
         ``(N, N)`` distances as ``float64``, rows in the representation's node
         order (``embedder.nodes()``).
     """
-    return representation.dist().detach().cpu().numpy()
+    with torch.no_grad():
+        return representation.dist().detach().cpu().numpy()
 
 
 def hyperbolic_knn_classification(

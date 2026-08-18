@@ -197,6 +197,30 @@ def test_pairwise_distance_matrix_exact_at_large_radius():
     assert np.isclose(D[0, 1], 5.0, atol=1e-6)
 
 
+def test_pairwise_distance_matrix_does_not_build_autograd_graph():
+    """Regression: dist() must run under no_grad, not just get detach()ed after.
+
+    A fitted representation's parameters are ``requires_grad=True`` (they were
+    just optimised). Computing dist() with grad tracking on briefly materialises
+    the full (N, N, d) autograd graph before the detach() below discards it --
+    for a large N this graph is what drove a CUDA OOM right after training
+    (observed on ogbl-ddi, N=4267). Asserting dist() sees grad disabled is the
+    direct regression check for the torch.no_grad() wrap.
+    """
+    rep, _ = _two_poincare_clusters()
+    saw_grad_enabled = []
+    original_dist = rep.dist
+
+    def spying_dist(*args, **kwargs):
+        saw_grad_enabled.append(torch.is_grad_enabled())
+        return original_dist(*args, **kwargs)
+
+    rep.dist = spying_dist
+    with torch.enable_grad():
+        pairwise_distance_matrix(rep)
+    assert saw_grad_enabled == [False]
+
+
 def test_knn_separates_well_separated_clusters():
     rep, y = _two_poincare_clusters()
     res = hyperbolic_knn_classification(rep, y, k=5, seed=0)
