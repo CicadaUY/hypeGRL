@@ -20,11 +20,16 @@ from hypegrl.representations import (
     ExactPolarRepresentation,
     HyperboloidRepresentation,
     PolarRepresentation,
+    TangentRepresentation,
 )
 
 torch.set_default_dtype(torch.float64)
 
 ALL_REPS = [PolarRepresentation, BallRepresentation, HyperboloidRepresentation]
+DIST_BETWEEN_REPS = [
+    PolarRepresentation, BallRepresentation, HyperboloidRepresentation,
+    ExactPolarRepresentation, TangentRepresentation,
+]
 
 
 def _random_polar(n, d, r_lo, r_hi, seed=0):
@@ -275,3 +280,70 @@ def test_optimisation_is_rotation_equivariant(rep_cls):
         assert rotated == pytest.approx(base, rel=1e-9, abs=1e-12), (
             f"{rep_cls.__name__}: rotating the configuration changed the loss "
             f"{base:.12f} -> {rotated:.12f}")
+
+
+# ---------------------------------------------------------------------------
+# dist_between: the gather-based sibling of dist(), for negative-sampling
+# losses that must avoid materialising the full (N, N) matrix.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("rep_cls", DIST_BETWEEN_REPS)
+def test_dist_between_matches_dist_flat_pairs(rep_cls):
+    """dist_between(i, j) with 1-D i/j must equal dist()[i, j] elementwise."""
+    r, V = _random_polar(12, 3, 0.5, 6.0, seed=2)
+    rep = rep_cls.from_polar(r, V)
+    D = rep.dist().detach()
+
+    i_idx = torch.tensor([0, 1, 2, 5, 7])
+    j_idx = torch.tensor([1, 3, 4, 6, 0])
+    got = rep.dist_between(i_idx, j_idx).detach()
+    ref = D[i_idx, j_idx]
+    assert torch.allclose(got, ref, atol=1e-8), f"{rep_cls.__name__} disagrees"
+
+
+@pytest.mark.parametrize("rep_cls", DIST_BETWEEN_REPS)
+def test_dist_between_matches_dist_broadcast_negatives(rep_cls):
+    """dist_between((P,1), (P,K)) -- the negative-sampling call shape -- must
+    equal dist()[i_idx, j_idx]'s broadcast-indexed result."""
+    r, V = _random_polar(15, 3, 0.5, 6.0, seed=4)
+    rep = rep_cls.from_polar(r, V)
+    D = rep.dist().detach()
+
+    i_idx = torch.tensor([0, 2, 5, 9]).unsqueeze(1)          # (P, 1)
+    j_idx = torch.tensor([[1, 3, 4], [0, 1, 6], [1, 2, 3], [0, 4, 8]])  # (P, K)
+    got = rep.dist_between(i_idx, j_idx).detach()
+    ref = D[i_idx, j_idx]
+    assert got.shape == (4, 3)
+    assert torch.allclose(got, ref, atol=1e-8), f"{rep_cls.__name__} disagrees"
+
+
+@pytest.mark.parametrize("rep_cls", DIST_BETWEEN_REPS)
+def test_dist_between_gradient_flows_to_parameters(rep_cls):
+    """Gradients through dist_between must reach every optimisable parameter,
+    same as through dist() -- it is the accessor the ranking loss decodes."""
+    r, V = _random_polar(10, 3, 0.5, 4.0, seed=6)
+    rep = rep_cls.from_polar(r, V)
+    i_idx = torch.tensor([0, 1, 2])
+    j_idx = torch.tensor([3, 4, 5])
+    rep.dist_between(i_idx, j_idx).sum().backward()
+    for p in rep.parameters():
+        assert p.grad is not None
+        assert torch.isfinite(p.grad).all()
+
+
+@pytest.mark.parametrize("rep_cls", DIST_BETWEEN_REPS)
+def test_dist_between_does_not_allocate_full_matrix(rep_cls):
+    """Regression guard: dist_between must not internally call dist() (which
+    would defeat the whole point -- materialising the (N, N) matrix it exists
+    to avoid). Patches dist() on the instance to raise if invoked."""
+    r, V = _random_polar(8, 3, 0.5, 4.0, seed=9)
+    rep = rep_cls.from_polar(r, V)
+
+    def _forbidden():
+        raise AssertionError("dist_between must not call the full dist()")
+
+    rep.dist = _forbidden
+    i_idx = torch.tensor([0, 1])
+    j_idx = torch.tensor([2, 3])
+    out = rep.dist_between(i_idx, j_idx)
+    assert torch.isfinite(out).all()

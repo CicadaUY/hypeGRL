@@ -82,5 +82,8 @@ class BallRepresentation(Representation):
         return zero_diagonal(
             POINCARE_BALL.dist(self._X.unsqueeze(1), self._X.unsqueeze(0)))
 
+    def dist_between(self, i_idx: torch.Tensor, j_idx: torch.Tensor) -> torch.Tensor:
+        return POINCARE_BALL.dist(self._X[i_idx], self._X[j_idx])
+
 
 __all__ = ["BallRepresentation"]

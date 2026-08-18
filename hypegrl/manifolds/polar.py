@@ -89,6 +89,33 @@ def polar_distances_torch(r: torch.Tensor, V: torch.Tensor) -> torch.Tensor:
     return torch.log1p(m + torch.sqrt(m * (m + 2.0) + 1e-30))
 
 
+def polar_distances_between_torch(
+    r_i: torch.Tensor, v_i: torch.Tensor, r_j: torch.Tensor, v_j: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Elementwise sibling of :func:`polar_distances_torch`: distance between
+    *paired* points rather than all pairs — the same stable law-of-cosines
+    formula with the ``[:, None]``/``[None, :]`` all-pairs broadcasting
+    dropped, so it costs ``O(len(r_i))`` instead of ``O(N²)``. Used by
+    gather-based losses (negative-sampling ranking) via
+    ``Representation.dist_between`` for the ``polar``/``tangent`` charts,
+    whose ``dist()`` has no other elementwise primitive to reuse (unlike
+    ball/hyperboloid/exact_polar, whose underlying ``geoopt`` manifold
+    ``dist(x, y)`` is already elementwise/broadcastable).
+
+    ``r_i``/``r_j`` and ``v_i``/``v_j`` must be broadcastable against each
+    other (e.g. both ``(P,)``/``(P, D)`` for ``P`` distinct pairs, or
+    ``(P, 1)``/``(P, 1, D)`` against ``(P, K)``/``(P, K, D)`` for a
+    one-to-many batch, mirroring how ``dist_between`` is called for negatives).
+    """
+    dr = r_i - r_j
+    chord2 = ((v_i - v_j) ** 2).sum(-1)
+    m = (2.0 * torch.sinh(0.5 * dr) ** 2
+         + 0.5 * torch.sinh(r_i) * torch.sinh(r_j) * chord2)
+    m = m.clamp_min(0.0)
+    return torch.log1p(m + torch.sqrt(m * (m + 2.0) + 1e-30))
+
+
 _TINY = 1e-15
 
 
@@ -285,4 +312,7 @@ class WarpedPolarHyperboloid(geoopt.Manifold):
         return True, None
 
 
-__all__ = ["polar_distances", "polar_distances_torch", "WarpedPolarHyperboloid"]
+__all__ = [
+    "polar_distances", "polar_distances_torch", "polar_distances_between_torch",
+    "WarpedPolarHyperboloid",
+]

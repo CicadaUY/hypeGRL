@@ -64,5 +64,8 @@ class HyperboloidRepresentation(Representation):
         return zero_diagonal(
             self._manifold.dist(self._H.unsqueeze(1), self._H.unsqueeze(0)))
 
+    def dist_between(self, i_idx: torch.Tensor, j_idx: torch.Tensor) -> torch.Tensor:
+        return self._manifold.dist(self._H[i_idx], self._H[j_idx])
+
 
 __all__ = ["HyperboloidRepresentation"]

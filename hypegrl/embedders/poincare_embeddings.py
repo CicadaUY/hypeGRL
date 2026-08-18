@@ -242,6 +242,54 @@ def ranking_nll_from_dist(
     return -(A * log_prob).sum()
 
 
+def ranking_nll_gathered(
+    rep,
+    A: torch.Tensor,
+    n_negatives: int = 10,
+    eps: float = 1e-12,
+    node_weights: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """
+    Mathematically identical to ``ranking_nll_from_dist(rep.dist(), A, ...)``,
+    computed via :meth:`~hypegrl.representations.Representation.dist_between`
+    instead of a precomputed dense ``D``, so the full ``(N, N)`` — internally
+    ``(N, N, d)`` — distance matrix is never materialised. Positives cost
+    ``O(E)`` (``E`` = number of nonzero entries of ``A``) and negatives cost
+    ``O(N · n_negatives)``, matching what the negative-sampling approximation
+    was already meant to need (see :func:`ranking_nll_from_dist`'s docstring).
+
+    This is the function the embedder's training loop actually calls; the
+    ``X``/``D``-based :func:`ranking_nll`/:func:`ranking_nll_from_dist` remain
+    for their existing standalone/test-facing contract and are not on the hot
+    path (see the module design notes).
+
+    Parameters mirror :func:`ranking_nll_from_dist`, with ``rep``
+    (a fitted :class:`~hypegrl.representations.Representation`) in place of
+    ``D``.
+    """
+    N = A.shape[0]
+    device = A.device
+
+    neg_idx = sample_negatives(A.detach(), n_negatives, node_weights)  # (N, n_neg)
+    i_all = torch.arange(N, device=device).unsqueeze(1)                # (N, 1)
+    d_neg = rep.dist_between(i_all, neg_idx)                            # (N, n_neg)
+    exp_neg_sum = torch.exp(-d_neg).sum(dim=1)                          # (N,)
+
+    i_pos, j_pos = torch.nonzero(A, as_tuple=True)                     # (P,), (P,)
+    if i_pos.numel() == 0:
+        # No edges: nothing to rank. Keep rep's parameters in the graph
+        # (via d_neg) for a zero gradient, matching ranking_nll_from_dist's
+        # analogous "D.sum() * 0.0" empty-graph fallback.
+        return d_neg.sum() * 0.0
+
+    d_pos = rep.dist_between(i_pos, j_pos)                              # (P,)
+    denom = torch.exp(-d_pos) + exp_neg_sum[i_pos]                      # (P,)
+    log_prob = -d_pos - torch.log(denom + eps)                          # (P,)
+    weight = A[i_pos, j_pos]                                            # (P,) differentiable
+
+    return -(weight * log_prob).sum()
+
+
 # ---------------------------------------------------------------------------
 # Fermi-Dirac decoder / loss (alternative probabilistic interpretation)
 # ---------------------------------------------------------------------------
@@ -567,15 +615,21 @@ class PoincareEmbeddingsEmbedder(HyperbolicEmbedder):
         self._nodes         = list(G.nodes())  # rows follow G.nodes() (no reorder)
         return self
 
-    def _loss_from_dist(self, D: torch.Tensor, A: torch.Tensor) -> torch.Tensor:
-        """The selected loss, evaluated from a pairwise-distance matrix ``D``."""
+    def _loss_from_rep(self, rep_, A: torch.Tensor) -> torch.Tensor:
+        """
+        The selected loss, evaluated from the live representation ``rep_``.
+
+        Ranking uses the gather-based :func:`ranking_nll_gathered` (no full
+        ``(N, N)`` distance matrix); Fermi-Dirac still calls ``rep_.dist()``
+        since its full-matrix cost is intentional (see the module docstring).
+        """
         if self.loss == "ranking":
             # Degree-dampened negatives only while burning in; uniform otherwise.
             weights = self._neg_weights if self._burnin_active else None
-            return ranking_nll_from_dist(
-                D, A, self.n_negatives, node_weights=weights
+            return ranking_nll_gathered(
+                rep_, A, self.n_negatives, node_weights=weights
             )
-        return fermi_dirac_nll_from_dist(D, A, self.r, self.t)
+        return fermi_dirac_nll_from_dist(rep_.dist(), A, self.r, self.t)
 
     def _optimize_phase(
         self,
@@ -593,7 +647,7 @@ class PoincareEmbeddingsEmbedder(HyperbolicEmbedder):
         ``a_omega`` and ``loss_history``.
         """
         def loss_fn(rep_, A_t: torch.Tensor) -> torch.Tensor:
-            return self._loss_from_dist(rep_.dist(), A_t)
+            return self._loss_from_rep(rep_, A_t)
 
         if not unknown_edges:
             # Fixed graph: structural similarity is the (constant) adjacency.
@@ -668,11 +722,12 @@ class PoincareEmbeddingsEmbedder(HyperbolicEmbedder):
         -------
         ``(N, N)`` NumPy array.
         """
-        if hasattr(X, "dist"):
-            D = X.dist().detach()
-        else:
-            X_t = torch.as_tensor(X, dtype=torch.float64)
-            D = poincare_distance_matrix(X_t)
+        with torch.no_grad():
+            if hasattr(X, "dist"):
+                D = X.dist().detach()
+            else:
+                X_t = torch.as_tensor(X, dtype=torch.float64)
+                D = poincare_distance_matrix(X_t)
         if self.loss == "ranking":
             return D.detach().cpu().numpy()
         return torch.sigmoid((self.r - D) / self.t).detach().cpu().numpy()

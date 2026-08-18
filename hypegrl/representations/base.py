@@ -180,7 +180,7 @@ class Representation(ABC):
     """
     Base class for a chart-specific embedding representation.
 
-    Subclasses implement four methods:
+    Subclasses implement five methods:
 
     - ``from_polar(r, v, **cfg)`` — build a representation from canonical polar
       coordinates (the primary constructor; ``from_ball``/``from_hyperboloid``
@@ -189,16 +189,20 @@ class Representation(ABC):
     - ``parameters()`` — the ``geoopt`` parameters ``RiemannianAdam`` steps.
     - ``dist()`` — the ``(N, N)`` pairwise hyperbolic distance from those
       parameters (autograd-differentiable, zero diagonal).
+    - ``dist_between(i_idx, j_idx)`` — the same distance, gathered for only
+      the given index pairs, without materialising the full matrix (what a
+      negative-sampling loss decodes; see its own docstring).
 
-    **Differentiable accessor vs. readouts (important):** ``dist()`` is the
-    *live* geometric accessor — it is built from the parameters and carries the
-    gradient, so it is what a loss decodes. The ``to_polar`` / ``to_ball`` /
-    ``to_hyperboloid`` methods are **detached readouts** for inspection and
-    interop (plotting, `embeddings()`, warm-starting a later fit); a decoder
-    built on them would silently receive no gradient. If a future decoder needs a
-    *differentiable* geometric quantity other than distance (e.g. the
-    inner-product an RDPG decoder wants), add a purpose-built live accessor
-    alongside ``dist()`` (``inner()``) rather than differentiating a ``to_*``.
+    **Differentiable accessor vs. readouts (important):** ``dist()`` and
+    ``dist_between()`` are the *live* geometric accessors — built from the
+    parameters and carrying the gradient, so they're what a loss decodes. The
+    ``to_polar`` / ``to_ball`` / ``to_hyperboloid`` methods are **detached
+    readouts** for inspection and interop (plotting, `embeddings()`,
+    warm-starting a later fit); a decoder built on them would silently
+    receive no gradient. If a future decoder needs a *differentiable*
+    geometric quantity other than distance (e.g. the inner-product an RDPG
+    decoder wants), add a purpose-built live accessor alongside ``dist()``
+    (``inner()``) rather than differentiating a ``to_*``.
     """
 
     # ------------------------------------------------------------------
@@ -227,6 +231,26 @@ class Representation(ABC):
         The ``(N, N)`` pairwise hyperbolic distance — the **live, differentiable**
         geometric accessor a loss decodes. Built from :meth:`parameters`, with an
         exact-zero diagonal (see :func:`zero_diagonal`).
+        """
+        ...
+
+    @abstractmethod
+    def dist_between(self, i_idx: torch.Tensor, j_idx: torch.Tensor) -> torch.Tensor:
+        """
+        Differentiable hyperbolic distance between indexed pairs of points,
+        without materialising the full ``(N, N)`` matrix ``dist()`` builds.
+
+        ``i_idx``/``j_idx`` are integer index tensors into this
+        representation's node order, broadcastable against each other exactly
+        as plain fancy indexing would be: both ``(P,)`` gives ``P`` pairwise
+        distances (one per row), and ``(P, 1)`` against ``(P, K)`` gives ``K``
+        distances per row (e.g. a positive index paired with its ``K`` sampled
+        negatives). Equivalent to ``self.dist()[i_idx, j_idx]``, but
+        ``O(len(i_idx)·len(j_idx))`` memory/compute instead of ``O(N²)`` — the
+        gather-based accessor a negative-sampling loss decodes, so the full
+        matrix is never built. No diagonal handling: callers never pass
+        ``i_idx == j_idx`` (real edges have ``i≠j``; sampled negatives exclude
+        self).
         """
         ...
 

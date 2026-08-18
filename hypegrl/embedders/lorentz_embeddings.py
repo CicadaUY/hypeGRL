@@ -333,6 +333,57 @@ def lorentz_ranking_nll_from_dist(
     return -(w * log_prob).sum()
 
 
+def lorentz_ranking_nll_gathered(
+    rep,
+    A: torch.Tensor,
+    n_negatives: int,
+    unknown_mask: torch.Tensor,
+    weighted: bool,
+    eps: float = 1e-12,
+) -> torch.Tensor:
+    """
+    Mathematically identical to
+    ``lorentz_ranking_nll_from_dist(rep.dist(), A, ...)``, computed via
+    :meth:`~hypegrl.representations.Representation.dist_between` instead of a
+    precomputed dense ``D``, so the full ``(N, N)`` — internally ``(N, N, d)``
+    — distance matrix is never materialised. Positives cost ``O(P)`` (``P`` =
+    number of nonzero entries of ``A``) and negatives cost
+    ``O(P · n_negatives)``.
+
+    This is the function the embedder's training loop actually calls; the
+    ``X``/``D``-based :func:`lorentz_ranking_nll`/
+    :func:`lorentz_ranking_nll_from_dist` remain for their existing
+    standalone/test-facing contract and are not on the hot path.
+
+    Parameters mirror :func:`lorentz_ranking_nll_from_dist`, with ``rep``
+    (a fitted :class:`~hypegrl.representations.Representation`) in place of
+    ``D``.
+    """
+    i_idx, j_idx = torch.nonzero(A, as_tuple=True)        # (P,), (P,)
+    if i_idx.numel() == 0:
+        # No edges: nothing to rank. Keep rep's parameters in the graph for a
+        # zero gradient, matching lorentz_ranking_nll_from_dist's analogous
+        # "D.sum() * 0.0" empty-graph fallback.
+        empty = torch.zeros(0, dtype=torch.long, device=A.device)
+        return rep.dist_between(empty, empty).sum() * 0.0
+
+    thresh = A[i_idx, j_idx]                              # (P,) = K_ij
+
+    neg_idx = sample_similarity_negatives(
+        A.detach(), i_idx, thresh.detach(), unknown_mask, n_negatives
+    )                                                     # (P, n_neg)
+
+    d_pos = rep.dist_between(i_idx, j_idx)                # (P,)
+    d_neg = rep.dist_between(i_idx.unsqueeze(1), neg_idx) # (P, n_neg)
+
+    # denom_{ij} = e^{-d(i,j)} (the positive) + sum over sampled negatives.
+    denom = torch.exp(-d_pos) + torch.exp(-d_neg).sum(dim=1)   # (P,)
+    log_prob = -d_pos - torch.log(denom + eps)                # (P,)
+
+    w = thresh if weighted else torch.ones_like(thresh)
+    return -(w * log_prob).sum()
+
+
 # ---------------------------------------------------------------------------
 # Embedder
 # ---------------------------------------------------------------------------
@@ -510,7 +561,7 @@ class LorentzEmbeddingsEmbedder(HyperbolicEmbedder):
         )
 
         def loss_fn(rep_, A_t: torch.Tensor) -> torch.Tensor:
-            return self._loss_from_dist(rep_.dist(), A_t)
+            return self._loss_from_rep(rep_, A_t)
 
         if not unknown_edges:
             # Fixed graph: structural similarity is the (constant) adjacency.
@@ -551,16 +602,17 @@ class LorentzEmbeddingsEmbedder(HyperbolicEmbedder):
         self._nodes        = list(G.nodes())   # rows follow G.nodes() (no reorder)
         return self
 
-    def _loss_from_dist(self, D: torch.Tensor, A: torch.Tensor) -> torch.Tensor:
+    def _loss_from_rep(self, rep_, A: torch.Tensor) -> torch.Tensor:
         """
-        Soft-ranking loss from a pairwise-distance matrix ``D`` (e.g.
-        ``rep.dist()``). Positives are weighted by ``K_{ij}`` only when unknown
-        edges are present (so ``Omega = {}`` reproduces the paper's unweighted
-        Eq. 12); negatives come from known, less-similar nodes.
+        Soft-ranking loss from the live representation ``rep_``, via the
+        gather-based :func:`lorentz_ranking_nll_gathered` (no full ``(N, N)``
+        distance matrix). Positives are weighted by ``K_{ij}`` only when
+        unknown edges are present (so ``Omega = {}`` reproduces the paper's
+        unweighted Eq. 12); negatives come from known, less-similar nodes.
         """
         weighted = len(self._unknown_edges) > 0
-        return lorentz_ranking_nll_from_dist(
-            D, A, self.n_negatives, self._unknown_mask, weighted
+        return lorentz_ranking_nll_gathered(
+            rep_, A, self.n_negatives, self._unknown_mask, weighted
         )
 
     def embeddings(self) -> np.ndarray:
@@ -623,10 +675,11 @@ class LorentzEmbeddingsEmbedder(HyperbolicEmbedder):
         -------
         ``(N, N)`` NumPy array of hyperbolic distances.
         """
-        if hasattr(X, "dist"):
-            return X.dist().detach().cpu().numpy()
-        H = torch.tensor(poincare_to_lorentz(X), dtype=torch.float64)
-        return lorentz_distance_matrix(H, self.manifold).detach().cpu().numpy()
+        with torch.no_grad():
+            if hasattr(X, "dist"):
+                return X.dist().detach().cpu().numpy()
+            H = torch.tensor(poincare_to_lorentz(X), dtype=torch.float64)
+            return lorentz_distance_matrix(H, self.manifold).detach().cpu().numpy()
 
     # ------------------------------------------------------------------
     # Capability flags

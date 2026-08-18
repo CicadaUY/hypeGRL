@@ -22,7 +22,11 @@ import geoopt
 import torch
 import torch.nn.functional as F
 
-from hypegrl.manifolds.polar import WarpedPolarHyperboloid, polar_distances_torch
+from hypegrl.manifolds.polar import (
+    WarpedPolarHyperboloid,
+    polar_distances_between_torch,
+    polar_distances_torch,
+)
 from hypegrl.representations.base import Representation, as_tensor, zero_diagonal
 
 _SPHERE = geoopt.Sphere()
@@ -108,6 +112,11 @@ class PolarRepresentation(Representation):
     def dist(self) -> torch.Tensor:
         return zero_diagonal(polar_distances_torch(self._radius(), self._v))
 
+    def dist_between(self, i_idx: torch.Tensor, j_idx: torch.Tensor) -> torch.Tensor:
+        r = self._radius()
+        return polar_distances_between_torch(
+            r[i_idx], self._v[i_idx], r[j_idx], self._v[j_idx])
+
 
 class ExactPolarRepresentation(Representation):
     """
@@ -182,6 +191,11 @@ class ExactPolarRepresentation(Representation):
     def dist(self) -> torch.Tensor:
         r, v = self._unpack()
         return zero_diagonal(polar_distances_torch(r, v))
+
+    def dist_between(self, i_idx: torch.Tensor, j_idx: torch.Tensor) -> torch.Tensor:
+        # self._x is kept on-manifold (v unit-norm) by projx/expmap, so the
+        # manifold's own elementwise dist needs no _unpack renormalisation.
+        return self._manifold.dist(self._x[i_idx], self._x[j_idx])
 
 
 __all__ = ["PolarRepresentation", "ExactPolarRepresentation"]

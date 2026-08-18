@@ -18,6 +18,8 @@ from hypegrl.embedders.lorentz_embeddings import (
     LorentzEmbeddingsEmbedder,
     lorentz_distance_matrix,
     lorentz_ranking_nll,
+    lorentz_ranking_nll_from_dist,
+    lorentz_ranking_nll_gathered,
 )
 from hypegrl.embedders.poincare_embeddings import (
     PoincareEmbeddingsEmbedder,
@@ -25,6 +27,8 @@ from hypegrl.embedders.poincare_embeddings import (
     fermi_dirac_nll,
     poincare_distance_matrix,
     ranking_nll,
+    ranking_nll_from_dist,
+    ranking_nll_gathered,
     sample_negatives,
 )
 from hypegrl.embedders.poincare_maps import (
@@ -38,6 +42,7 @@ from hypegrl.inference.joint_optimizer import (
 )
 from hypegrl.manifolds.lorentz import LORENTZ, StableLorentz
 from hypegrl.manifolds.poincare import poincare_distances_polar, polar_to_poincare
+from hypegrl.representations import BallRepresentation, HyperboloidRepresentation
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
@@ -1018,6 +1023,64 @@ def test_pe_ranking_nll_grad_flows_to_unknown_weights(small_graph):
     assert torch.isfinite(A.grad).all()
 
 
+def test_pe_ranking_nll_gathered_matches_dense(karate):
+    """ranking_nll_gathered (the gather-based hot path) must reproduce
+    ranking_nll_from_dist (the dense reference) exactly, given identical
+    negative sampling -- it is the same math computed without the full
+    (N, N) distance matrix, not an approximation of it."""
+    A = torch.tensor(nx.to_numpy_array(karate), dtype=torch.float64)
+    N = A.shape[0]
+    X = torch.randn(N, 3, dtype=torch.float64) * 0.1
+    rep = BallRepresentation(X.clone())
+
+    torch.manual_seed(42)
+    dense = ranking_nll_from_dist(rep.dist(), A, n_negatives=5)
+    torch.manual_seed(42)
+    gathered = ranking_nll_gathered(rep, A, n_negatives=5)
+    assert torch.allclose(dense, gathered, atol=1e-9)
+
+    weights = torch.rand(N, dtype=torch.float64)
+    torch.manual_seed(7)
+    dense_w = ranking_nll_from_dist(rep.dist(), A, n_negatives=5, node_weights=weights)
+    torch.manual_seed(7)
+    gathered_w = ranking_nll_gathered(rep, A, n_negatives=5, node_weights=weights)
+    assert torch.allclose(dense_w, gathered_w, atol=1e-9)
+
+
+def test_pe_ranking_nll_gathered_grad_flows_to_unknown_weights(small_graph):
+    """Same differentiability contract as test_pe_ranking_nll_grad_flows_to_
+    unknown_weights, but for the gathered path the embedder's fit() loop
+    actually calls."""
+    A = torch.tensor(nx.to_numpy_array(small_graph), dtype=torch.float64)
+    A.requires_grad_(True)
+    X = torch.randn(5, 2, dtype=torch.float64) * 0.1
+    rep = BallRepresentation(X)
+    ranking_nll_gathered(rep, A, n_negatives=3).backward()
+    assert A.grad is not None
+    assert torch.isfinite(A.grad).all()
+
+
+def test_pe_fit_ranking_never_calls_full_dist(karate):
+    """Regression guard for the O(N^2) memory bug: PoincareEmbeddingsEmbedder's
+    ranking-loss fit() must never call Representation.dist() (the full (N, N)
+    matrix) -- only the gather-based dist_between()."""
+    orig_dist = BallRepresentation.dist
+    calls = []
+
+    def spy(self):
+        calls.append(1)
+        return orig_dist(self)
+
+    BallRepresentation.dist = spy
+    try:
+        emb = PoincareEmbeddingsEmbedder(
+            d=2, n_steps=15, log_every=0, random_state=0, loss="ranking")
+        emb.fit(karate)
+    finally:
+        BallRepresentation.dist = orig_dist
+    assert calls == []
+
+
 def test_pe_fermi_dirac_decoder_in_unit_interval():
     X = torch.randn(7, 2, dtype=torch.float64) * 0.2
     P = fermi_dirac_decoder(X, r=2.0, t=1.0)
@@ -1306,6 +1369,71 @@ def test_lorentz_loss_unweighted_when_omega_empty(karate):
     torch.manual_seed(0)
     w_u = lorentz_ranking_nll(X, Aw, 5, mask, weighted=False)
     assert not torch.allclose(w_w, w_u)
+
+
+def test_lorentz_ranking_nll_gathered_matches_dense(karate):
+    """lorentz_ranking_nll_gathered (the gather-based hot path) must reproduce
+    lorentz_ranking_nll_from_dist (the dense reference) exactly, given
+    identical negative sampling."""
+    A = (torch.tensor(nx.to_numpy_array(karate), dtype=torch.float64) > 0).double()
+    N = A.shape[0]
+    X = torch.tensor(
+        np.column_stack([np.sqrt(1 + 0.01 * np.arange(N)), 0.1 * np.ones((N, 2))]),
+        dtype=torch.float64,
+    )
+    rep = HyperboloidRepresentation(X, manifold=LORENTZ)
+    mask = torch.zeros(N, N, dtype=torch.bool)
+
+    for weighted in (False, True):
+        torch.manual_seed(42)
+        dense = lorentz_ranking_nll_from_dist(rep.dist(), A, 5, mask, weighted)
+        torch.manual_seed(42)
+        gathered = lorentz_ranking_nll_gathered(rep, A, 5, mask, weighted)
+        assert torch.allclose(dense, gathered, atol=1e-9)
+
+    Aw = A.clone()
+    Aw[A > 0] = 3.0
+    torch.manual_seed(7)
+    dense_w = lorentz_ranking_nll_from_dist(rep.dist(), Aw, 5, mask, True)
+    torch.manual_seed(7)
+    gathered_w = lorentz_ranking_nll_gathered(rep, Aw, 5, mask, True)
+    assert torch.allclose(dense_w, gathered_w, atol=1e-9)
+
+
+def test_lorentz_ranking_nll_gathered_empty_graph_is_zero_and_differentiable():
+    """No edges: nothing to rank, but the loss must stay connected to rep's
+    parameters (a zero gradient, not a detached constant)."""
+    N = 5
+    X = torch.tensor(
+        np.column_stack([np.sqrt(1 + 0.01 * np.arange(N)), 0.1 * np.ones((N, 2))]),
+        dtype=torch.float64,
+    )
+    rep = HyperboloidRepresentation(X, manifold=LORENTZ)
+    A = torch.zeros(N, N, dtype=torch.float64)
+    mask = torch.zeros(N, N, dtype=torch.bool)
+    loss = lorentz_ranking_nll_gathered(rep, A, 5, mask, weighted=False)
+    assert loss.item() == 0.0
+    loss.backward()  # must not raise (graph is connected via dist_between)
+
+
+def test_lorentz_embeddings_fit_never_calls_full_dist(karate):
+    """Regression guard for the O(N^2) memory bug: LorentzEmbeddingsEmbedder's
+    fit() must never call Representation.dist() (the full (N, N) matrix) --
+    only the gather-based dist_between()."""
+    orig_dist = HyperboloidRepresentation.dist
+    calls = []
+
+    def spy(self):
+        calls.append(1)
+        return orig_dist(self)
+
+    HyperboloidRepresentation.dist = spy
+    try:
+        emb = LorentzEmbeddingsEmbedder(d=2, n_steps=15, log_every=0, random_state=0)
+        emb.fit(karate)
+    finally:
+        HyperboloidRepresentation.dist = orig_dist
+    assert calls == []
 
 
 def test_stable_lorentz_clamps_spatial_norm():

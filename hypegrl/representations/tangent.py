@@ -42,7 +42,7 @@ from __future__ import annotations
 import geoopt
 import torch
 
-from hypegrl.manifolds.polar import polar_distances_torch
+from hypegrl.manifolds.polar import polar_distances_between_torch, polar_distances_torch
 from hypegrl.representations.base import Representation, as_tensor, zero_diagonal
 
 _EUCLIDEAN = geoopt.Euclidean()
@@ -82,6 +82,10 @@ class TangentRepresentation(Representation):
     def dist(self) -> torch.Tensor:
         r, v = self._polar()
         return zero_diagonal(polar_distances_torch(r, v))
+
+    def dist_between(self, i_idx: torch.Tensor, j_idx: torch.Tensor) -> torch.Tensor:
+        r, v = self._polar()
+        return polar_distances_between_torch(r[i_idx], v[i_idx], r[j_idx], v[j_idx])
 
 
 __all__ = ["TangentRepresentation"]
