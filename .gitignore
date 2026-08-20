@@ -6,8 +6,17 @@ __pycache__/
 *.so
 *.egg-info/
 .build/
+build/
 dist/
 .coverage
+
+# Virtualenvs
+venv/
+
+# Local scratch: saved embeddings/checkpoints and ad-hoc scripts
+models/
+saved_models/
+test/
 
 # Sphinx build output
 docs/_build/
@@ -15,6 +24,10 @@ docs/_build/
 # Experiments output
 experiments/results/
 
-# Downloaded dataset caches (OpenFlights, torch_geometric Airports, etc.);
-# vendored data lives under experiments/data/ and is tracked separately.
+# Downloaded dataset caches (OpenFlights, torch_geometric Airports, etc.)
 /data/
+
+# Downloaded datasets under experiments/data/ (OGB, Planetoid, ...); the
+# vendored single-cell CSVs are the exception and stay tracked.
+experiments/data/*
+!experiments/data/single_cell/
