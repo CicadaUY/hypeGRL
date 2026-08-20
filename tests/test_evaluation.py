@@ -13,6 +13,7 @@ from hypegrl.evaluation import (
     link_prediction_split,
     pairwise_distance_matrix,
     precision_recall_f1_at_k,
+    roc_auc,
     training_graph,
 )
 from hypegrl.representations import BallRepresentation, PolarRepresentation
@@ -129,6 +130,55 @@ def test_ranking_rejects_nan_scores():
         f1_at_k(bad, is_pos, higher_is_link=False)
     with pytest.raises(ValueError, match="NaN"):
         lift_curve(bad, is_pos, higher_is_link=False)
+
+
+def test_roc_auc_perfect_when_positives_rank_first():
+    assert roc_auc(_SCORES, _POS_TOP, higher_is_link=True) == 1.0
+
+
+def test_roc_auc_direction_flag_flips_the_metric():
+    # The same candidates read as distances put both positives last.
+    assert roc_auc(_SCORES, _POS_TOP, higher_is_link=False) == 0.0
+
+
+def test_roc_auc_matches_the_rank_statistic_by_hand():
+    # 3 positives / 2 negatives. AUC = (# concordant pos-neg pairs) / (n_pos*n_neg).
+    # scores 3,1,4,2,5 with positives at 3, 4, 5 -> negatives are 1 and 2.
+    # Every positive outranks every negative: 6/6 concordant.
+    scores = np.array([3.0, 1.0, 4.0, 2.0, 5.0])
+    is_pos = np.array([True, False, True, False, True])
+    assert roc_auc(scores, is_pos, higher_is_link=True) == 1.0
+
+    # Move one positive below both negatives: 4/6 concordant.
+    scores_b = np.array([0.5, 1.0, 4.0, 2.0, 5.0])
+    assert roc_auc(scores_b, is_pos, higher_is_link=True) == pytest.approx(4.0 / 6.0)
+
+
+def test_roc_auc_is_half_for_uninformative_scores():
+    # All-tied scores carry no ranking information; pins the tie convention.
+    tied = np.ones(10)
+    assert roc_auc(tied, _POS_TOP, higher_is_link=True) == 0.5
+
+
+def test_roc_auc_is_invariant_to_monotone_rescaling():
+    # AUC is rank-based, so an affine rescale must not move it.
+    base = roc_auc(_SCORES, _POS_TOP, higher_is_link=True)
+    assert roc_auc(3.0 * _SCORES + 7.0, _POS_TOP, higher_is_link=True) == base
+
+
+def test_roc_auc_rejects_nan_scores():
+    is_pos = np.array([True, False, False])
+    bad = np.array([0.1, np.nan, 0.3])
+    with pytest.raises(ValueError, match="NaN"):
+        roc_auc(bad, is_pos, higher_is_link=False)
+
+
+def test_roc_auc_requires_both_classes():
+    # sklearn raises an opaque message here; ours must name the cause.
+    with pytest.raises(ValueError, match="both classes"):
+        roc_auc(_SCORES, np.ones(10, dtype=bool))
+    with pytest.raises(ValueError, match="both classes"):
+        roc_auc(_SCORES, np.zeros(10, dtype=bool))
 
 
 def test_lift_curve_first_bin_capture():

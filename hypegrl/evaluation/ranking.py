@@ -1,4 +1,4 @@
-"""Ranking metrics for link prediction: F1 at a cutoff and the lift curve.
+"""Ranking metrics for link prediction: F1 at a cutoff, ROC AUC, and the lift curve.
 
 These operate on candidate-level arrays — a ``scores`` vector and a boolean
 ``is_positive`` mask over the same candidates — and know nothing about graphs.
@@ -6,34 +6,40 @@ The ``higher_is_link`` flag selects the ranking direction: ``True`` when a
 larger score means a more likely link (edge probabilities), ``False`` when a
 smaller score does (hyperbolic distances).
 
-Precision/recall/F1 are delegated to :mod:`sklearn.metrics`; only the ranking
-and top-``k`` thresholding are done here. The lift curve is computed directly,
-as scikit-learn has no decile-lift equivalent.
+Precision/recall/F1 and ROC AUC are delegated to :mod:`sklearn.metrics`; only
+the ranking and top-``k`` thresholding are done here. The lift curve is computed
+directly, as scikit-learn has no decile-lift equivalent.
 """
 from dataclasses import dataclass
 
 import numpy as np
-from sklearn.metrics import f1_score, precision_score, recall_score
+from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
 
 
-def _rank_order(scores: np.ndarray, higher_is_link: bool) -> np.ndarray:
-    """Indices of ``scores`` ordered most-likely-link first (stable ties).
+def _validated_scores(scores) -> np.ndarray:
+    """``scores`` as a float array, rejecting ``NaN``.
 
-    Rejects ``NaN`` scores: ``np.argsort`` sorts ``NaN`` to the end regardless of
-    direction, so a ``NaN``-scored candidate is silently ranked least-likely-link
-    rather than raising — a ``NaN`` in the decoder output would corrupt the metric
-    invisibly. Fail loudly instead. (``±inf`` is left alone: it orders
-    deterministically and a ``+inf`` distance is a legitimate "definitely not a
-    link".)
+    A ``NaN`` score is silently mis-ranked rather than raising: ``np.argsort``
+    places it last regardless of direction, and scikit-learn's ranking metrics
+    likewise sort it to one end. Either way a ``NaN`` in the decoder output
+    would corrupt the metric invisibly, so fail loudly instead. (``±inf`` is
+    left alone: it orders deterministically and a ``+inf`` distance is a
+    legitimate "definitely not a link".)
     """
     scores = np.asarray(scores, dtype=float)
     if np.isnan(scores).any():
         raise ValueError(
-            "scores contains NaN; ranking is undefined (np.argsort places NaN "
-            "last regardless of `higher_is_link`, silently mis-ranking those "
+            "scores contains NaN; ranking is undefined (NaN sorts to one end "
+            "regardless of `higher_is_link`, silently mis-ranking those "
             "candidates). This usually means the decoder produced NaN — check the "
             "embedding/decoder output before scoring."
         )
+    return scores
+
+
+def _rank_order(scores: np.ndarray, higher_is_link: bool) -> np.ndarray:
+    """Indices of ``scores`` ordered most-likely-link first (stable ties)."""
+    scores = _validated_scores(scores)
     order = np.argsort(scores, kind="stable")
     if higher_is_link:
         order = order[::-1]
@@ -91,6 +97,52 @@ def precision_recall_f1_at_k(
 def f1_at_k(scores, is_positive, k: int = None, higher_is_link: bool = True) -> float:
     """F1 for the top-``k`` predictions (see :func:`precision_recall_f1_at_k`)."""
     return precision_recall_f1_at_k(scores, is_positive, k, higher_is_link)["f1"]
+
+
+def roc_auc(scores, is_positive, higher_is_link: bool = True) -> float:
+    """Area under the ROC curve for a ranked candidate list.
+
+    The probability that a randomly chosen positive candidate outranks a
+    randomly chosen negative one; 0.5 is uninformative ranking and 1.0 is
+    perfect separation. Unlike :func:`precision_recall_f1_at_k` it needs no
+    cutoff ``k``, which makes it the informative metric when positives are a
+    tiny fraction of the candidates — the usual case for link prediction over
+    all non-edges, where top-``k`` F1 is dominated by the candidate-set size.
+
+    Parameters
+    ----------
+    scores:
+        Candidate scores.
+    is_positive:
+        Boolean mask over the same candidates, ``True`` for held-out edges.
+    higher_is_link:
+        ``True`` when a larger score means a more likely link (edge
+        probabilities), ``False`` when a smaller one does (hyperbolic
+        distances).
+
+    Returns
+    -------
+    The AUC in ``[0, 1]``.
+
+    Raises
+    ------
+    ValueError
+        If ``scores`` contains ``NaN``, or if ``is_positive`` is all-``True``
+        or all-``False`` (AUC needs both classes to be defined).
+    """
+    scores = _validated_scores(scores)
+    is_positive = np.asarray(is_positive, dtype=bool)
+
+    n_pos = int(is_positive.sum())
+    if n_pos == 0 or n_pos == is_positive.size:
+        raise ValueError(
+            f"is_positive has {n_pos} positives out of {is_positive.size} "
+            "candidates; ROC AUC is undefined unless both classes are present."
+        )
+
+    # Negating is exact (no re-binning, ties and ±inf preserved), so this is the
+    # same metric read in the other direction rather than an approximation.
+    return float(roc_auc_score(is_positive, scores if higher_is_link else -scores))
 
 
 @dataclass(frozen=True)

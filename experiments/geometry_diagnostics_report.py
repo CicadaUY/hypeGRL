@@ -222,83 +222,6 @@ def arxiv_collaboration_graph(cache_dir: Optional[str] = None) -> nx.Graph:
     return _read_snap_edgelist_gz(path)
 
 
-def wordnet_noun_subtree_graph(
-    root: str = "mammal.n.01", max_nodes: int = 3000
-) -> nx.Graph:
-    """
-    Undirected hypernym graph of the WordNet noun subtree rooted at
-    ``root`` (default: the mammal subtree from Nickel & Kiela's own
-    qualitative figures). See the "Additional literature datasets" note
-    above this section for why a subtree rather than the full ~82k-synset
-    noun hierarchy.
-
-    Edges are *direct* hypernym relations (parent-child in the hierarchy),
-    not the transitive closure Nickel & Kiela train their reconstruction
-    task on -- the direct edges are the graph *structure*; the transitive
-    closure is a denser training signal derived from it, and this module
-    diagnoses structure.
-
-    Requires ``nltk`` and its WordNet corpus (``nltk.download("wordnet")``,
-    attempted automatically on first use if missing).
-
-    Parameters
-    ----------
-    root:
-        A WordNet synset name to root the subtree at, e.g. ``"mammal.n.01"``,
-        ``"animal.n.01"`` (bigger), ``"furniture.n.01"`` (smaller).
-    max_nodes:
-        Safety cap: if the subtree has more synsets than this, it's
-        truncated to a breadth-first ``max_nodes`` prefix from ``root``
-        (keeps the graph's ``mean_hyperbolicity``/``ollivier_ricci_curvature``
-        dense-distance-matrix cost bounded).
-    """
-    try:
-        from nltk.corpus import wordnet as wn
-        wn.ensure_loaded()
-    except LookupError:
-        import nltk
-        nltk.download("wordnet")
-        from nltk.corpus import wordnet as wn
-
-    root_synset = wn.synset(root)
-
-    # BFS over hyponyms (children) from root, capped at max_nodes, so a
-    # truncation (if any) keeps a single connected subtree near the root
-    # rather than an arbitrary scattered subset.
-    G = nx.Graph()
-    visited = {root_synset}
-    queue = [root_synset]
-    G.add_node(root_synset.name())
-    while queue and len(visited) < max_nodes:
-        node = queue.pop(0)
-        for child in node.hyponyms():
-            if child in visited:
-                continue
-            if len(visited) >= max_nodes:
-                break
-            visited.add(child)
-            G.add_edge(node.name(), child.name())
-            queue.append(child)
-    return G
-
-
-def citation_graph(name: str = "Cora", root: Optional[str] = None) -> nx.Graph:
-    """
-    Citation network (``"Cora"``, ``"CiteSeer"``, or ``"PubMed"``), edge
-    direction dropped. See the "Additional literature datasets" note above
-    this section -- these are the three datasets Chami et al.'s HGCN paper
-    reports Gromov delta-hyperbolicity for.
-    """
-    from torch_geometric.datasets import Planetoid
-
-    data = Planetoid(
-        root=str(root) if root is not None else f"./data/citation_{name.lower()}",
-        name=name,
-    )[0]
-    G = nx.Graph()
-    G.add_nodes_from(range(data.num_nodes))
-    G.add_edges_from(data.edge_index.numpy().T.tolist())
-    return G
 
 
 def karate_club_graph() -> nx.Graph:
@@ -459,9 +382,12 @@ def _dataset_loaders() -> dict:
         OFFICIAL_SETTINGS,
         airports_graph,
         balanced_tree_graph,
+        citation_graph,
         openflights_graph,
         polblogs_graph,
         single_cell_graph,
+        wordnet_mammal_closure_graph,
+        wordnet_noun_subtree_graph,
     )
 
     loaders: dict[str, Callable[[], object]] = {
@@ -479,6 +405,9 @@ def _dataset_loaders() -> dict:
         loaders[f"airports/{region}"] = lambda region=region: airports_graph(region)[0]
     loaders["openflights"] = lambda: openflights_graph()
     loaders["wordnet/mammal"] = lambda: wordnet_noun_subtree_graph("mammal.n.01")
+    # The closure is what the link-prediction ladder actually embeds (the tree
+    # fragments under edge removal), so it gets its own diagnostics row.
+    loaders["wordnet/mammal_closure"] = lambda: wordnet_mammal_closure_graph()
     for citation_name in ("Cora", "CiteSeer", "PubMed"):
         loaders[f"citation/{citation_name}"] = (
             lambda citation_name=citation_name: citation_graph(citation_name)

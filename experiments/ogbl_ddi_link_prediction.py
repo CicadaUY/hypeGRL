@@ -19,7 +19,7 @@ import numpy as np
 import torch
 
 from hypegrl.embedders import LorentzEmbeddingsEmbedder, PoincareEmbeddingsEmbedder
-from hypegrl.evaluation import pairwise_distance_matrix
+from hypegrl.evaluation import pairwise_distance_matrix, roc_auc
 
 _EMBEDDERS = {
     "poincare": PoincareEmbeddingsEmbedder,
@@ -64,16 +64,54 @@ def load_ddi_split(root: str = "./data/ogbl-ddi"):
     return G, split
 
 
-def _score_edges(D: np.ndarray, edges) -> np.ndarray:
-    """Score = -distance (higher = more likely link), read off the decoder matrix."""
+def _score_edges(M: np.ndarray, edges, higher_is_link: bool = False) -> np.ndarray:
+    """Read edge scores off a decoder matrix, higher = more likely link.
+
+    ``higher_is_link=False`` (the default) negates, for the hyperbolic arms
+    whose ``M`` is a *distance* matrix; the RDPG baseline passes ``True``
+    because its ``M`` is already a connection probability.
+    """
     edges = np.asarray(edges)
-    return -D[edges[:, 0], edges[:, 1]]
+    scores = M[edges[:, 0], edges[:, 1]]
+    return scores if higher_is_link else -scores
 
 
-def evaluate_split(D: np.ndarray, split: dict, evaluator, key: str) -> dict:
-    y_pred_pos = _score_edges(D, split[key]["edge"])
-    y_pred_neg = _score_edges(D, split[key]["edge_neg"])
-    return evaluator.eval({"y_pred_pos": y_pred_pos, "y_pred_neg": y_pred_neg})
+def evaluate_split(
+    M: np.ndarray, split: dict, evaluator, key: str, higher_is_link: bool = False
+) -> dict:
+    """Hits@20 (OGB's own Evaluator) plus ROC AUC on the same scores.
+
+    ROC AUC is the bridge metric to the hierarchy ladder in
+    ``link_prediction_experiment.py``. Its *absolute* value is not comparable to
+    the ladder's: OGB supplies a fixed, *sampled* negative set (~10^5 pairs),
+    where the ladder scores every non-edge (~10^6), and discriminating sampled
+    negatives is a much easier problem. Only the within-dataset
+    hyperbolic-minus-Euclidean difference is comparable across the two.
+    """
+    y_pred_pos = _score_edges(M, split[key]["edge"], higher_is_link)
+    y_pred_neg = _score_edges(M, split[key]["edge_neg"], higher_is_link)
+    result = dict(evaluator.eval({"y_pred_pos": y_pred_pos, "y_pred_neg": y_pred_neg}))
+    scores = np.concatenate([y_pred_pos, y_pred_neg])
+    is_pos = np.concatenate([
+        np.ones(len(y_pred_pos), dtype=bool), np.zeros(len(y_pred_neg), dtype=bool)])
+    result["roc_auc"] = roc_auc(scores, is_pos, higher_is_link=True)
+    return result
+
+
+def rdpg_score_matrix(G: nx.Graph, n_components: int) -> np.ndarray:
+    """RDPG connection probabilities from an adjacency spectral embedding.
+
+    The Euclidean control arm. This is
+    ``link_prediction_experiment.rdpg_candidate_scores``' decoder specialised to
+    a precomputed-matrix interface, since ogbl-ddi is scored from OGB's own edge
+    arrays rather than through a ``LinkPredictionSplit``.
+    """
+    from graspologic.embed import AdjacencySpectralEmbed
+
+    nodes = list(G.nodes())
+    A = nx.to_numpy_array(G, nodelist=nodes, weight=None)
+    Xhat = AdjacencySpectralEmbed(n_components=n_components).fit_transform(A)
+    return Xhat @ Xhat.T
 
 
 def run(
@@ -85,41 +123,52 @@ def run(
     method: str = "poincare",
     **embedder_kwargs,
 ) -> dict:
-    """Fit ``method`` ('poincare' or 'lorentz') and evaluate Hits@20.
+    """Fit ``method`` and evaluate Hits@20 and ROC AUC.
 
-    Both embedders share the ranking (Nickel & Kiela) objective -- Lorentz is
-    the same loss on the hyperboloid chart rather than the ball, so any gap
-    is attributable to the chart's optimisation numerics, not the objective.
-    Extra ``embedder_kwargs`` (e.g. ``lr_X``) are passed through so each
-    method can use its own tuned defaults (Lorentz: lr_X=0.3; Poincare:
-    lr_X=1e-2 -- see CLAUDE.md) unless explicitly overridden.
+    ``method`` is ``"poincare"``, ``"lorentz"``, or ``"rdpg"``. The two
+    hyperbolic embedders share the ranking (Nickel & Kiela) objective -- Lorentz
+    is the same loss on the hyperboloid chart rather than the ball, so any gap
+    between them is attributable to the chart's optimisation numerics, not the
+    objective. ``"rdpg"`` is the Euclidean control: an adjacency spectral
+    embedding decoded by dot product, matching the baseline arm of the hierarchy
+    ladder in ``link_prediction_experiment.py`` so ogbl-ddi can be read as that
+    ladder's anti-hierarchical anchor.
+
+    Extra ``embedder_kwargs`` (e.g. ``lr_X``) are passed through so each method
+    can use its own tuned defaults (Lorentz: lr_X=0.3; Poincare: lr_X=1e-2 --
+    see CLAUDE.md) unless explicitly overridden; ``"rdpg"`` takes none.
     """
     from ogb.linkproppred import Evaluator
 
-    if method not in _EMBEDDERS:
-        raise ValueError(f"method must be one of {sorted(_EMBEDDERS)}; got {method!r}.")
+    if method not in _EMBEDDERS and method != "rdpg":
+        raise ValueError(
+            f"method must be one of {sorted(_EMBEDDERS) + ['rdpg']}; got {method!r}.")
 
     G, split = load_ddi_split(root=root)
     print(f"ogbl-ddi training graph: {G.number_of_nodes()} nodes, "
           f"{G.number_of_edges()} edges")
 
-    embedder = _EMBEDDERS[method](
-        d=d, n_steps=n_steps, random_state=seed, device=device, **embedder_kwargs
-    )
     t0 = time.perf_counter()
-    embedder.fit(G)
+    if method == "rdpg":
+        M, higher_is_link = rdpg_score_matrix(G, n_components=d), True
+    else:
+        embedder = _EMBEDDERS[method](
+            d=d, n_steps=n_steps, random_state=seed, device=device, **embedder_kwargs
+        )
+        embedder.fit(G)
+        M = pairwise_distance_matrix(embedder.embeddings_representation())
+        higher_is_link = False
     fit_time = time.perf_counter() - t0
 
-    D = pairwise_distance_matrix(embedder.embeddings_representation())
     evaluator = Evaluator(name="ogbl-ddi")
 
     return {
         "method": method,
-        "valid": evaluate_split(D, split, evaluator, "valid"),
-        "test": evaluate_split(D, split, evaluator, "test"),
+        "valid": evaluate_split(M, split, evaluator, "valid", higher_is_link),
+        "test": evaluate_split(M, split, evaluator, "test", higher_is_link),
         "fit_time_s": fit_time,
         "d": d,
-        "n_steps": n_steps,
+        "n_steps": n_steps if method != "rdpg" else None,
         "seed": seed,
     }
 

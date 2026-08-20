@@ -20,6 +20,7 @@ from hypegrl.evaluation.ranking import (
     f1_at_k,
     lift_curve,
     precision_recall_f1_at_k,
+    roc_auc,
 )
 
 __all__ = [
@@ -31,6 +32,7 @@ __all__ = [
     "f1_at_k",
     "lift_curve",
     "precision_recall_f1_at_k",
+    "roc_auc",
     "hyperbolic_knn_classification",
     "pairwise_distance_matrix",
 ]

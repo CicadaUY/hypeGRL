@@ -311,3 +311,200 @@ def airports_graph(
     G = nx.relabel_nodes(G.subgraph(kept).copy(), old_to_new)
     y = y_all[kept]
     return G, y
+
+
+def largest_connected_component(G: nx.Graph) -> nx.Graph:
+    """
+    Largest connected component of ``G``, relabelled ``0..N-1``.
+
+    Node and edge attributes are preserved; the ``0..N-1`` relabelling keeps the
+    contract every loader in this module follows, so a component of a component
+    is still a well-formed dataset. Ties between equal-sized components are
+    broken by ``max``'s first-wins rule over ``nx.connected_components``.
+    """
+    kept = sorted(max(nx.connected_components(G), key=len))
+    old_to_new = {old: new for new, old in enumerate(kept)}
+    return nx.relabel_nodes(G.subgraph(kept).copy(), old_to_new)
+
+
+def _wordnet():
+    """The nltk WordNet corpus reader, downloading the corpus on first use."""
+    try:
+        from nltk.corpus import wordnet as wn
+        wn.ensure_loaded()
+    except LookupError:
+        import nltk
+        nltk.download("wordnet")
+        from nltk.corpus import wordnet as wn
+    return wn
+
+
+def wordnet_mammal_closure_graph(root: str = "mammal.n.01") -> nx.Graph:
+    """
+    Undirected *transitive closure* of the WordNet hypernymy DAG below ``root``.
+
+    This is the graph Nickel & Kiela (2017) evaluate link prediction on -- the
+    closure of the is-a relation, with an edge for every ancestor/descendant
+    pair -- rather than the direct parent-child edges
+    :func:`wordnet_noun_subtree_graph` returns.
+
+    The closure, not the tree, is what edge-removal link prediction needs. In a
+    tree every edge is a bridge, so every held-out positive ends up with its two
+    endpoints in different components of the training graph; restricting to the
+    giant component (the standard protocol) then leaves *zero* positives to
+    score. Measured on this subtree at ``q=0.9`` over seeds 0-4: the tree
+    fragments into 109-132 components whose giant component covers 485-908 of
+    1170 nodes and retains **0%** of the held-out edges, every time. The closure
+    fragments into only 2-3 components, its giant component covers 1180-1181 of
+    1182 nodes, and it retains 99.6-99.9% of the held-out edges.
+
+    The hierarchy is a DAG, not a tree -- a synset may have several hypernyms --
+    so the closure is taken over all hypernym links internal to the subtree,
+    and ``instance_hyponyms`` (named instances, e.g. individual animals) are
+    followed alongside ``hyponyms``.
+
+    Nodes are relabelled ``0..N-1`` following this module's convention, with the
+    WordNet synset name kept as a ``synset`` node attribute.
+
+    Parameters
+    ----------
+    root:
+        Synset name to root the hierarchy at.
+
+    Returns
+    -------
+    nx.Graph
+        The undirected closure, with a ``synset`` attribute per node.
+
+    Notes
+    -----
+    Measured against the WordNet release installed here (nltk ``wordnet``,
+    version reported by ``nltk.corpus.wordnet.get_version()``), the mammal
+    subtree gives ``N = 1182`` and ``E = 6542``. Sizes track the installed
+    WordNet release, so callers should not hard-code them. Nickel & Kiela's
+    published ``mammal_closure.tsv`` is commonly cited at 1181 nodes / 6541
+    edges; that file has *not* been diffed against this construction here, so
+    the agreement is circumstantial rather than verified.
+
+    The closure has **diameter 2** -- the root is adjacent to every descendant,
+    so any two nodes are at most two hops apart through it. Four-point
+    hyperbolicity is therefore bounded by construction on this graph, and its
+    small ``delta`` should not be read as evidence of tree-likeness; the
+    hierarchy here is a matter of provenance (a literal is-a taxonomy, whose
+    underlying DAG is a tree of diameter 16) rather than of the closure's
+    metric.
+    """
+    wn = _wordnet()
+    root_synset = wn.synset(root)
+
+    # BFS the subtree; instance_hyponyms covers named instances, which
+    # hyponyms() alone omits.
+    members = {root_synset}
+    queue = [root_synset]
+    while queue:
+        node = queue.pop()
+        for child in node.hyponyms() + node.instance_hyponyms():
+            if child not in members:
+                members.add(child)
+                queue.append(child)
+
+    # Every hypernym link internal to the subtree, keeping multi-parent
+    # structure: the taxonomy is a DAG, and dropping the extra parents would
+    # silently discard closure edges.
+    D = nx.DiGraph()
+    D.add_nodes_from(s.name() for s in members)
+    for s in members:
+        for parent in s.hypernyms() + s.instance_hypernyms():
+            if parent in members:
+                D.add_edge(parent.name(), s.name())
+
+    closure = nx.transitive_closure_dag(D).to_undirected()
+
+    # Rebuild in canonical order. Node *labels* would be deterministic anyway
+    # (they come from sorted synset names), but iteration order would not: the
+    # synsets above come out of a set, so edge insertion order varies between
+    # processes. That matters because `link_prediction_split` draws one RNG
+    # value per edge in `G.edges()` order, so a varying edge order silently
+    # makes a seeded split irreproducible.
+    order = sorted(closure.nodes())
+    index = {name: i for i, name in enumerate(order)}
+    G = nx.Graph()
+    G.add_nodes_from(range(len(order)))
+    G.add_edges_from(sorted(
+        tuple(sorted((index[u], index[v]))) for u, v in closure.edges()))
+    nx.set_node_attributes(G, {i: name for i, name in enumerate(order)}, "synset")
+    return G
+
+
+
+def wordnet_noun_subtree_graph(
+    root: str = "mammal.n.01", max_nodes: int = 3000
+) -> nx.Graph:
+    """
+    Undirected hypernym graph of the WordNet noun subtree rooted at
+    ``root`` (default: the mammal subtree from Nickel & Kiela's own
+    qualitative figures). See the "Additional literature datasets" note in
+    ``experiments/geometry_diagnostics_report.py`` for why a subtree rather than the full ~82k-synset
+    noun hierarchy.
+
+    Edges are *direct* hypernym relations (parent-child in the hierarchy),
+    not the transitive closure Nickel & Kiela train their reconstruction
+    task on -- the direct edges are the graph *structure*; the transitive
+    closure is a denser training signal derived from it, and this module
+    diagnoses structure.
+
+    Requires ``nltk`` and its WordNet corpus (``nltk.download("wordnet")``,
+    attempted automatically on first use if missing).
+
+    Parameters
+    ----------
+    root:
+        A WordNet synset name to root the subtree at, e.g. ``"mammal.n.01"``,
+        ``"animal.n.01"`` (bigger), ``"furniture.n.01"`` (smaller).
+    max_nodes:
+        Safety cap: if the subtree has more synsets than this, it's
+        truncated to a breadth-first ``max_nodes`` prefix from ``root``
+        (keeps the graph's ``mean_hyperbolicity``/``ollivier_ricci_curvature``
+        dense-distance-matrix cost bounded).
+    """
+    wn = _wordnet()
+    root_synset = wn.synset(root)
+
+    # BFS over hyponyms (children) from root, capped at max_nodes, so a
+    # truncation (if any) keeps a single connected subtree near the root
+    # rather than an arbitrary scattered subset.
+    G = nx.Graph()
+    visited = {root_synset}
+    queue = [root_synset]
+    G.add_node(root_synset.name())
+    while queue and len(visited) < max_nodes:
+        node = queue.pop(0)
+        for child in node.hyponyms():
+            if child in visited:
+                continue
+            if len(visited) >= max_nodes:
+                break
+            visited.add(child)
+            G.add_edge(node.name(), child.name())
+            queue.append(child)
+    return G
+
+
+
+def citation_graph(name: str = "Cora", root: Optional[str] = None) -> nx.Graph:
+    """
+    Citation network (``"Cora"``, ``"CiteSeer"``, or ``"PubMed"``), edge
+    direction dropped. See the "Additional literature datasets" note in
+    ``experiments/geometry_diagnostics_report.py`` -- these are the three datasets Chami et al.'s HGCN paper
+    reports Gromov delta-hyperbolicity for.
+    """
+    from torch_geometric.datasets import Planetoid
+
+    data = Planetoid(
+        root=str(root) if root is not None else f"./data/citation_{name.lower()}",
+        name=name,
+    )[0]
+    G = nx.Graph()
+    G.add_nodes_from(range(data.num_nodes))
+    G.add_edges_from(data.edge_index.numpy().T.tolist())
+    return G
