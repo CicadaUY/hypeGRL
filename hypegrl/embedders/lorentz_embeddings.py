@@ -124,6 +124,7 @@ import geoopt
 import networkx as nx
 import numpy as np
 import torch
+from torch.utils.checkpoint import checkpoint
 
 from hypegrl.embedders.base import HyperbolicEmbedder
 from hypegrl.inference.joint_optimizer import joint_optimize
@@ -189,6 +190,7 @@ def sample_similarity_negatives(
     thresh: torch.Tensor,
     unknown_mask: torch.Tensor,
     n_negatives: int,
+    chunk_size: int = 50_000,
 ) -> torch.Tensor:
     """
     Sample ``n_negatives`` negatives for every positive pair.
@@ -206,6 +208,20 @@ def sample_similarity_negatives(
     non-self node, and — only if the node's entire row is unknown — to any
     non-self node.
 
+    Processes positive pairs in chunks of ``chunk_size`` rather than building
+    the ``(P, N)`` candidate mask for all ``P`` pairs at once: unlike
+    ``sample_negatives`` (one candidate row per *node*, ``O(N, N)``), this
+    sampler needs one candidate row per *positive pair* (``N(i, j)`` depends
+    on the edge's own threshold ``K_{ij}``, not just its source), so ``P`` can
+    be ``O(N^2)`` on a dense graph — on ogbl-ddi (N=4,267, P≈2.1M directed
+    edges) the unchunked ``(P, N)`` boolean mask alone was 8.5 GiB, and the
+    ``float64`` cast before ``multinomial`` a further 70+ GiB, an instant CUDA
+    OOM. Chunking bounds peak memory to ``O(chunk_size, N)`` — the per-row
+    math is unchanged, so this is exact, not an approximation; it does change
+    the order in which ``torch.multinomial`` draws are consumed relative to
+    an unchunked call, so a run's exact sample (for a fixed seed) is not
+    bit-identical across different ``chunk_size`` values.
+
     Parameters
     ----------
     A:
@@ -219,30 +235,44 @@ def sample_similarity_negatives(
         ``(N, N)`` boolean mask, ``True`` at unknown (``Omega``) positions.
     n_negatives:
         Number of negatives to draw per positive pair.
+    chunk_size:
+        Number of positive pairs processed per batch.
 
     Returns
     -------
     ``(P, n_negatives)`` long tensor of sampled column indices.
     """
     N = A.shape[0]
+    P = i_idx.shape[0]
     not_self = ~torch.eye(N, dtype=torch.bool, device=A.device)
-    row_not_self = not_self[i_idx]                       # (P, N)
-    known = ~unknown_mask[i_idx]                          # (P, N)
 
-    # Primary candidates: strictly less similar, known, not self.
-    cand = (A[i_idx] < thresh.unsqueeze(1)) & known & row_not_self
+    out = torch.empty(P, n_negatives, dtype=torch.long, device=A.device)
+    for start in range(0, P, chunk_size):
+        end = min(start + chunk_size, P)
+        i_chunk = i_idx[start:end]
+        thresh_chunk = thresh[start:end]
 
-    # Fallback 1: any known non-self node (ignore the threshold).
-    empty = ~cand.any(dim=1)
-    if empty.any():
-        cand[empty] = (known & row_not_self)[empty]
+        row_not_self = not_self[i_chunk]                      # (B, N)
+        known = ~unknown_mask[i_chunk]                        # (B, N)
 
-    # Fallback 2: any non-self node (node whose whole row is unknown).
-    empty = ~cand.any(dim=1)
-    if empty.any():
-        cand[empty] = row_not_self[empty]
+        # Primary candidates: strictly less similar, known, not self.
+        cand = (A[i_chunk] < thresh_chunk.unsqueeze(1)) & known & row_not_self
 
-    return torch.multinomial(cand.to(torch.float64), n_negatives, replacement=True)
+        # Fallback 1: any known non-self node (ignore the threshold).
+        empty = ~cand.any(dim=1)
+        if empty.any():
+            cand[empty] = (known & row_not_self)[empty]
+
+        # Fallback 2: any non-self node (node whose whole row is unknown).
+        empty = ~cand.any(dim=1)
+        if empty.any():
+            cand[empty] = row_not_self[empty]
+
+        out[start:end] = torch.multinomial(
+            cand.to(torch.float64), n_negatives, replacement=True
+        )
+
+    return out
 
 
 def lorentz_ranking_nll(
@@ -333,6 +363,29 @@ def lorentz_ranking_nll_from_dist(
     return -(w * log_prob).sum()
 
 
+def _lorentz_chunk_ranking_loss(
+    rep,
+    i_chunk: torch.Tensor,
+    j_chunk: torch.Tensor,
+    neg_idx: torch.Tensor,
+    thresh_chunk: torch.Tensor,
+    weighted: bool,
+    eps: float,
+) -> torch.Tensor:
+    """One chunk's contribution to the ranking loss -- factored out so it can
+    be wrapped in ``torch.utils.checkpoint.checkpoint`` (see
+    ``lorentz_ranking_nll_gathered``)."""
+    d_pos = rep.dist_between(i_chunk, j_chunk)                # (B,)
+    d_neg = rep.dist_between(i_chunk.unsqueeze(1), neg_idx)   # (B, n_neg)
+
+    # denom_{ij} = e^{-d(i,j)} (the positive) + sum over sampled negatives.
+    denom = torch.exp(-d_pos) + torch.exp(-d_neg).sum(dim=1)   # (B,)
+    log_prob = -d_pos - torch.log(denom + eps)                 # (B,)
+
+    w = thresh_chunk if weighted else torch.ones_like(thresh_chunk)
+    return -(w * log_prob).sum()
+
+
 def lorentz_ranking_nll_gathered(
     rep,
     A: torch.Tensor,
@@ -340,6 +393,7 @@ def lorentz_ranking_nll_gathered(
     unknown_mask: torch.Tensor,
     weighted: bool,
     eps: float = 1e-12,
+    chunk_size: int = 10_000,
 ) -> torch.Tensor:
     """
     Mathematically identical to
@@ -358,30 +412,62 @@ def lorentz_ranking_nll_gathered(
     Parameters mirror :func:`lorentz_ranking_nll_from_dist`, with ``rep``
     (a fitted :class:`~hypegrl.representations.Representation`) in place of
     ``D``.
+
+    Processes positive edges in batches of ``chunk_size`` rather than all
+    ``P`` at once. Unlike Poincaré's ``ranking_nll_gathered`` (one negative
+    row per *node*, ``O(N, n_negatives)``), this loss needs one negative row
+    per *positive edge* (``N(i, j)`` depends on the edge's own threshold
+    ``K_{ij}``), so the negative-distance tensor is ``(P, n_negatives)`` —
+    on a dense graph ``P`` can itself be ``~O(N^2)``, and on ogbl-ddi
+    (N=4,267, P≈2.1M, n_negatives=50, d+1=11) the unchunked call tried to
+    allocate a single ~8.75 GiB intermediate inside the geoopt Lorentz
+    ``dist`` and OOM'd — bigger than the ``O(N^2 · d)`` dense matrix this
+    function exists to avoid. Batching alone bounds each chunk's *forward*
+    allocation to ``O(chunk_size · n_negatives · d)``, but a plain Python
+    loop still leaves every chunk's saved-for-backward tensors alive at once
+    (nothing is freed until the single ``.backward()`` call the training
+    loop makes on the *summed* loss), so peak memory is unchanged from the
+    unchunked case by the time backward runs — confirmed by this OOM'ing
+    identically to the unchunked version, just one call frame deeper, before
+    this was fixed. Each chunk is therefore wrapped in
+    ``torch.utils.checkpoint.checkpoint(..., use_reentrant=False)``: forward
+    is run once to produce the chunk's loss without saving intermediates,
+    and recomputed from ``i_chunk``/``j_chunk``/``neg_idx`` during backward
+    to get its gradients, so at most one chunk's intermediates exist at a
+    time in *both* passes. This is exact (same forward computation, just
+    computed twice instead of cached) at the cost of ~1.3–1.5× more compute
+    for the backward pass, not an approximation. Summing chunk losses into
+    the running total is exact too (a sum over disjoint edges), and
+    gradients still flow through every edge.
     """
     i_idx, j_idx = torch.nonzero(A, as_tuple=True)        # (P,), (P,)
-    if i_idx.numel() == 0:
+    P = i_idx.shape[0]
+    if P == 0:
         # No edges: nothing to rank. Keep rep's parameters in the graph for a
         # zero gradient, matching lorentz_ranking_nll_from_dist's analogous
         # "D.sum() * 0.0" empty-graph fallback.
         empty = torch.zeros(0, dtype=torch.long, device=A.device)
         return rep.dist_between(empty, empty).sum() * 0.0
 
-    thresh = A[i_idx, j_idx]                              # (P,) = K_ij
+    A_detached = A.detach()
+    total = torch.zeros((), dtype=A.dtype, device=A.device)
+    for start in range(0, P, chunk_size):
+        end = min(start + chunk_size, P)
+        i_chunk = i_idx[start:end]
+        j_chunk = j_idx[start:end]
+        thresh_chunk = A[i_chunk, j_chunk]                # (B,) = K_ij
 
-    neg_idx = sample_similarity_negatives(
-        A.detach(), i_idx, thresh.detach(), unknown_mask, n_negatives
-    )                                                     # (P, n_neg)
+        neg_idx = sample_similarity_negatives(
+            A_detached, i_chunk, thresh_chunk.detach(), unknown_mask, n_negatives
+        )                                                  # (B, n_neg)
 
-    d_pos = rep.dist_between(i_idx, j_idx)                # (P,)
-    d_neg = rep.dist_between(i_idx.unsqueeze(1), neg_idx) # (P, n_neg)
+        total = total + checkpoint(
+            _lorentz_chunk_ranking_loss,
+            rep, i_chunk, j_chunk, neg_idx, thresh_chunk, weighted, eps,
+            use_reentrant=False,
+        )
 
-    # denom_{ij} = e^{-d(i,j)} (the positive) + sum over sampled negatives.
-    denom = torch.exp(-d_pos) + torch.exp(-d_neg).sum(dim=1)   # (P,)
-    log_prob = -d_pos - torch.log(denom + eps)                # (P,)
-
-    w = thresh if weighted else torch.ones_like(thresh)
-    return -(w * log_prob).sum()
+    return total
 
 
 # ---------------------------------------------------------------------------

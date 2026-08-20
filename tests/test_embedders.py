@@ -20,6 +20,7 @@ from hypegrl.embedders.lorentz_embeddings import (
     lorentz_ranking_nll,
     lorentz_ranking_nll_from_dist,
     lorentz_ranking_nll_gathered,
+    sample_similarity_negatives,
 )
 from hypegrl.embedders.poincare_embeddings import (
     PoincareEmbeddingsEmbedder,
@@ -1414,6 +1415,79 @@ def test_lorentz_ranking_nll_gathered_empty_graph_is_zero_and_differentiable():
     loss = lorentz_ranking_nll_gathered(rep, A, 5, mask, weighted=False)
     assert loss.item() == 0.0
     loss.backward()  # must not raise (graph is connected via dist_between)
+
+
+def test_lorentz_ranking_nll_gathered_chunking_is_exact(karate, monkeypatch):
+    """Chunking + gradient checkpointing must be exact, not an approximation:
+    the summed-over-chunks loss and its gradient must match the single-chunk
+    computation to floating-point tolerance.
+
+    Negative sampling is pinned to a deterministic stub first -- chunking
+    changes the order torch.multinomial consumes the RNG, so with live
+    sampling the two runs would legitimately draw different negatives and any
+    difference would be uninformative about the chunk arithmetic itself.
+    """
+    A = (torch.tensor(nx.to_numpy_array(karate), dtype=torch.float64) > 0).double()
+    N = A.shape[0]
+    mask = torch.zeros(N, N, dtype=torch.bool)
+
+    def fixed_negatives(A_, i_idx, thresh, unknown_mask, n_neg, chunk_size=None):
+        # Deterministic and independent of how the caller batches: negative z
+        # for row i is (i + 1 + z) mod N, so it never depends on chunk offsets.
+        offsets = torch.arange(1, n_neg + 1)
+        return (i_idx.unsqueeze(1) + offsets.unsqueeze(0)) % N
+
+    monkeypatch.setattr(
+        "hypegrl.embedders.lorentz_embeddings.sample_similarity_negatives",
+        fixed_negatives,
+    )
+
+    losses, grads = [], []
+    for chunk_size in (7, 10_000):  # many chunks vs. a single chunk
+        X = torch.tensor(
+            np.column_stack([np.sqrt(1 + 0.01 * np.arange(N)), 0.1 * np.ones((N, 2))]),
+            dtype=torch.float64,
+        )
+        rep = HyperboloidRepresentation(X, manifold=LORENTZ)
+        loss = lorentz_ranking_nll_gathered(
+            rep, A, 5, mask, weighted=False, chunk_size=chunk_size
+        )
+        loss.backward()
+        losses.append(loss.item())
+        grads.append(rep.parameters()[0].grad.clone())
+
+    assert np.isclose(losses[0], losses[1], atol=1e-9)
+    # Gradients must survive checkpoint recompute across chunk boundaries.
+    assert torch.allclose(grads[0], grads[1], atol=1e-9)
+    assert torch.isfinite(grads[0]).all() and grads[0].abs().sum() > 0
+
+
+def test_sample_similarity_negatives_chunking_preserves_candidate_validity(karate):
+    """Regression guard for the O(P, N) memory bug: chunk_size must not change
+    which nodes are valid negatives, only bound peak memory while getting
+    there. Every sampled index must be a genuine candidate under the same
+    less-similar/known/non-self rule the unchunked mask encoded, for both a
+    single-chunk and a forced multi-chunk run."""
+    A = (torch.tensor(nx.to_numpy_array(karate), dtype=torch.float64) > 0).double()
+    N = A.shape[0]
+    mask = torch.zeros(N, N, dtype=torch.bool)
+    i_idx, j_idx = torch.nonzero(A, as_tuple=True)
+    thresh = A[i_idx, j_idx]
+
+    for chunk_size in (3, 10_000):  # forces many chunks vs. a single chunk
+        torch.manual_seed(0)
+        neg_idx = sample_similarity_negatives(
+            A, i_idx, thresh, mask, 5, chunk_size=chunk_size
+        )
+        assert neg_idx.shape == (i_idx.shape[0], 5)
+
+        for row, i in enumerate(i_idx.tolist()):
+            candidates = set(neg_idx[row].tolist())
+            assert all(c != i for c in candidates)  # never self
+            strictly_less = {z for z in range(N) if z != i and A[i, z] < thresh[row]}
+            non_self = {z for z in range(N) if z != i}
+            valid = strictly_less if strictly_less else non_self  # fallback chain
+            assert candidates <= valid
 
 
 def test_lorentz_embeddings_fit_never_calls_full_dist(karate):

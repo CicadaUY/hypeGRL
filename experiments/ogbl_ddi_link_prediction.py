@@ -18,8 +18,13 @@ import networkx as nx
 import numpy as np
 import torch
 
-from hypegrl.embedders import PoincareEmbeddingsEmbedder
+from hypegrl.embedders import LorentzEmbeddingsEmbedder, PoincareEmbeddingsEmbedder
 from hypegrl.evaluation import pairwise_distance_matrix
+
+_EMBEDDERS = {
+    "poincare": PoincareEmbeddingsEmbedder,
+    "lorentz": LorentzEmbeddingsEmbedder,
+}
 
 
 def _ogb_safe_globals():
@@ -77,14 +82,30 @@ def run(
     seed: int = 0,
     root: str = "./data/ogbl-ddi",
     device: str = "cuda",
+    method: str = "poincare",
+    **embedder_kwargs,
 ) -> dict:
+    """Fit ``method`` ('poincare' or 'lorentz') and evaluate Hits@20.
+
+    Both embedders share the ranking (Nickel & Kiela) objective -- Lorentz is
+    the same loss on the hyperboloid chart rather than the ball, so any gap
+    is attributable to the chart's optimisation numerics, not the objective.
+    Extra ``embedder_kwargs`` (e.g. ``lr_X``) are passed through so each
+    method can use its own tuned defaults (Lorentz: lr_X=0.3; Poincare:
+    lr_X=1e-2 -- see CLAUDE.md) unless explicitly overridden.
+    """
     from ogb.linkproppred import Evaluator
+
+    if method not in _EMBEDDERS:
+        raise ValueError(f"method must be one of {sorted(_EMBEDDERS)}; got {method!r}.")
 
     G, split = load_ddi_split(root=root)
     print(f"ogbl-ddi training graph: {G.number_of_nodes()} nodes, "
           f"{G.number_of_edges()} edges")
 
-    embedder = PoincareEmbeddingsEmbedder(d=d, n_steps=n_steps, random_state=seed, device=device)
+    embedder = _EMBEDDERS[method](
+        d=d, n_steps=n_steps, random_state=seed, device=device, **embedder_kwargs
+    )
     t0 = time.perf_counter()
     embedder.fit(G)
     fit_time = time.perf_counter() - t0
@@ -93,6 +114,7 @@ def run(
     evaluator = Evaluator(name="ogbl-ddi")
 
     return {
+        "method": method,
         "valid": evaluate_split(D, split, evaluator, "valid"),
         "test": evaluate_split(D, split, evaluator, "test"),
         "fit_time_s": fit_time,
