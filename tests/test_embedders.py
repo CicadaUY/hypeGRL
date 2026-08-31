@@ -1534,3 +1534,62 @@ def test_lorentz_distance_matrix_symmetric_zero_diag(karate):
     assert D.shape == (N, N)
     assert torch.allclose(torch.diag(D), torch.zeros(N, dtype=torch.float64), atol=1e-5)
     assert torch.allclose(D, D.T, atol=1e-6)
+
+
+def test_hydra_curvature_search_reaches_beyond_the_legacy_ceiling():
+    """The curvature search must be bounded by conditioning, not by ``8 / max(D)``.
+
+    A balanced tree is the canonical hyperbolic object and prefers a sharp
+    curvature, but the interval inherited from the HYDRA R package stops at
+    ``(8 / max(D))^2`` -- 0.25 for a depth-8 tree -- and a fallback to ``k = 1``
+    then hid the truncation behind an exactly-1.0 answer. Both are pinned here:
+    the search must be allowed well past the old ceiling, and must return
+    something other than the old fallback value.
+    """
+    import networkx as nx
+
+    from hypegrl.embedders.hydra import COSH_ARG_MAX, HydraEmbedder
+
+    G = nx.balanced_tree(2, 8)
+    diameter = nx.diameter(G)
+    legacy_ceiling = (8.0 / diameter) ** 2
+    ceiling = (COSH_ARG_MAX / diameter) ** 2
+
+    assert ceiling > 20 * legacy_ceiling, (
+        "the conditioning bound should reach far past the legacy 8/max(D) one"
+    )
+
+    emb = HydraEmbedder(dim=2, curvature=None)
+    emb.fit(G)
+    k = emb.fitted_curvature
+
+    assert k is not None
+    assert legacy_ceiling < k <= ceiling, (
+        f"fitted curvature {k} should sit above the legacy ceiling "
+        f"{legacy_ceiling} and within the conditioning bound {ceiling}"
+    )
+    assert abs(k - 1.0) > 1e-6, "k = 1.0 exactly is the removed fallback"
+
+
+def test_hydra_curvature_search_survives_a_multimodal_stress():
+    """A coarse grid precedes the refinement because the stress is multimodal.
+
+    On a balanced tree the stress in ``k`` has a spurious dip two orders of
+    magnitude below its real optimum, which a bracketing method alone can settle
+    into. The fitted curvature must beat what a local search from the bottom of
+    the range would find.
+    """
+    import networkx as nx
+    import numpy as np
+
+    from hypegrl.embedders.hydra import HydraEmbedder, _hydra_fixed_curvature
+
+    G = nx.balanced_tree(2, 8)
+    emb = HydraEmbedder(dim=2, curvature=None)
+    emb.fit(G)
+
+    D = np.array(nx.floyd_warshall_numpy(G), dtype=float)
+    spurious = _hydra_fixed_curvature(D, 2, 5e-4, 1.0, False, False)["stress"]
+    assert emb.stress < spurious, (
+        "the search settled in the spurious low-curvature basin"
+    )

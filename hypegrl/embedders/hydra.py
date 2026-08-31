@@ -51,6 +51,20 @@ from hypegrl.embedders.base import HyperbolicEmbedder
 from hypegrl.manifolds.poincare import poincare_distances_polar
 
 
+# The largest ``sqrt(k) * max(D)`` the curvature search will consider. The
+# structural similarity is ``cosh(sqrt(k) * D)``, so its entries span
+# ``cosh(sqrt(k) * max(D))``; beyond ``cosh(37) ~ 6e15`` that spread exceeds the
+# float64 mantissa and the eigendecomposition retains only the leading structure,
+# making the stress it reports meaningless. Curvature is therefore searched up to
+# ``(COSH_ARG_MAX / max(D))^2`` and no further.
+COSH_ARG_MAX = 37.0
+
+# Points on the logarithmic grid scanned before the local refinement. The stress
+# is not unimodal in the curvature, so a bracketing method alone can settle in a
+# spurious basin.
+_CURVATURE_GRID = 48
+
+
 # ---------------------------------------------------------------------------
 # Internal spectral core
 # ---------------------------------------------------------------------------
@@ -524,15 +538,30 @@ class HydraEmbedder(HyperbolicEmbedder):
         isotropic_adj: bool,
     ) -> dict:
         """
-        Find the curvature minimising the embedding stress via scalar
-        optimisation, then return the corresponding embedding.
+        Find the curvature minimising the embedding stress, then return the
+        corresponding embedding.
 
-        The search interval is ``(eps, (8 / max(D))^2)`` — the same
-        heuristic used in the original HYDRA R package.
+        The search runs over ``(0, ((COSH_ARG_MAX) / max(D))^2]``. The ceiling is
+        set by conditioning rather than by taste: the structural similarity is
+        ``A = cosh(sqrt(k) * D)``, so its entries span ``cosh(sqrt(k) * max(D))``,
+        and once that exceeds the float64 mantissa the eigendecomposition keeps
+        only the leading structure and the stress it reports stops meaning
+        anything. ``COSH_ARG_MAX`` is the argument at which that spread reaches
+        the mantissa limit.
+
+        A coarse logarithmic grid precedes the local refinement because the
+        stress is not unimodal in ``k`` — a balanced tree of depth 8 has a
+        spurious dip near ``k = 5e-4`` that a bracketing method can settle into,
+        two orders of magnitude below its real optimum.
+
+        A curvature landing at the ceiling is reported through a warning rather
+        than silently returned: it means the graph wants a sharper curvature than
+        the ``cosh`` linearisation can represent, which is common for deep trees
+        and is a limitation of the strain formulation, not a property of the
+        graph.
         """
-        eps     = np.finfo(float).eps
-        k_upper = (8.0 / np.max(D)) ** 2
-        k_bounds = (eps, k_upper)
+        d_max = float(np.max(D))
+        k_upper = (COSH_ARG_MAX / d_max) ** 2
 
         def _stress_at_k(k: float) -> float:
             return _hydra_fixed_curvature(
@@ -540,14 +569,35 @@ class HydraEmbedder(HyperbolicEmbedder):
                 self.alpha, self.equi_adj, isotropic_adj,
             )["stress"]
 
-        result  = minimize_scalar(_stress_at_k, bounds=k_bounds, method="bounded")
-        k_opt   = result.x
-        s_opt   = result.fun
+        grid = np.geomspace(k_upper * 1e-8, k_upper, _CURVATURE_GRID)
+        stresses = np.array([_stress_at_k(k) for k in grid])
+        if not np.isfinite(stresses).any():
+            raise RuntimeError(
+                "no finite stress at any curvature in "
+                f"(0, {k_upper:.3g}]; the distance matrix may be degenerate."
+            )
+        best = int(np.nanargmin(np.where(np.isfinite(stresses), stresses, np.inf)))
 
-        # Never worse than the default k = 1 baseline.
-        s_k1 = _stress_at_k(1.0)
-        if s_k1 < s_opt:
-            k_opt = 1.0
+        lo = grid[max(best - 1, 0)]
+        hi = grid[min(best + 1, len(grid) - 1)]
+        k_opt, s_opt = grid[best], stresses[best]
+        if hi > lo:
+            refined = minimize_scalar(
+                _stress_at_k, bounds=(lo, hi), method="bounded"
+            )
+            if np.isfinite(refined.fun) and refined.fun < s_opt:
+                k_opt, s_opt = float(refined.x), float(refined.fun)
+
+        if k_opt > 0.95 * k_upper:
+            warnings.warn(
+                f"HYDRA curvature optimum {k_opt:.3g} sits at the search ceiling "
+                f"{k_upper:.3g}, which is where cosh(sqrt(k) * {d_max:.0f}) "
+                "exhausts float64 precision. The graph likely prefers a sharper "
+                "curvature than the strain linearisation can resolve; treat the "
+                "fitted value as a lower bound.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
         return _hydra_fixed_curvature(
             D, self.dim, k_opt,
