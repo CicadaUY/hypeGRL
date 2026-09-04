@@ -101,7 +101,7 @@ class PolarRepresentation(Representation):
             _SPHERE.projx(v.to(dev)), manifold=_SPHERE)
 
     @classmethod
-    def from_polar(cls, r, v, device: str = "cpu", **_) -> "PolarRepresentation":
+    def from_polar(cls, r, v, device: str = "cpu") -> "PolarRepresentation":
         r = as_tensor(r, device)
         v = as_tensor(v, device)
         # inverse softplus: u = log(expm1(r)); clamp keeps log(expm1(0)) finite.
@@ -179,8 +179,8 @@ class ExactPolarRepresentation(Representation):
             torch.cat([r, v], dim=-1), manifold=self._manifold)
 
     @classmethod
-    def from_polar(cls, r, v, device: str = "cpu", max_step: float = 30.0,
-                   **_) -> "ExactPolarRepresentation":
+    def from_polar(cls, r, v, device: str = "cpu",
+                   max_step: float = 30.0) -> "ExactPolarRepresentation":
         return cls(r, v, device=device, max_step=max_step)
 
     def _unpack(self) -> tuple[torch.Tensor, torch.Tensor]:
@@ -286,7 +286,7 @@ class CurvedPolarRepresentation(Representation):
 
     @classmethod
     def from_polar(cls, r, v, device: str = "cpu", chart_curvature: float = 0.25,
-                   max_step: float = 30.0, **_) -> "CurvedPolarRepresentation":
+                   max_step: float = 30.0) -> "CurvedPolarRepresentation":
         return cls(r, v, device=device, chart_curvature=chart_curvature,
                    max_step=max_step)
 

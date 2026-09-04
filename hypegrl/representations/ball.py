@@ -68,7 +68,7 @@ class BallRepresentation(Representation):
         self._X = geoopt.ManifoldParameter(X, manifold=POINCARE_BALL)
 
     @classmethod
-    def from_polar(cls, r, v, device: str = "cpu", **_) -> "BallRepresentation":
+    def from_polar(cls, r, v, device: str = "cpu") -> "BallRepresentation":
         X = polar_to_ball_torch(as_tensor(r, device), as_tensor(v, device))
         return cls(X, device=device)
 

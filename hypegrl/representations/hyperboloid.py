@@ -54,7 +54,7 @@ class HyperboloidRepresentation(Representation):
 
     @classmethod
     def from_polar(
-        cls, r, v, device: str = "cpu", max_norm: float = 1e3, **_,
+        cls, r, v, device: str = "cpu", max_norm: float = 1e3,
     ) -> "HyperboloidRepresentation":
         manifold = StableLorentz(max_norm=max_norm)
         H = polar_to_hyperboloid_torch(as_tensor(r, device), as_tensor(v, device))

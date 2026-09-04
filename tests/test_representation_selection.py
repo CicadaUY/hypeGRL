@@ -9,8 +9,9 @@ in the shared plumbing could reach the other four unnoticed — which is exactly
 what happened once: an embedder handing a chart-specific numerical clamp to
 whatever chart was selected turned every non-hyperboloid chart on
 :class:`LorentzEmbeddingsEmbedder` into a ``TypeError``. That clamp now lives
-where it belongs, in ``representation_kwargs``, so every chart option has a
-single source and a single rule. The matrix below is the guard.
+where it belongs, in ``representation_kwargs``, so every chart option has one
+source and one rule — a chart names what it takes, and Python rejects the rest.
+The matrix below is the guard.
 
 Budgets are deliberately tiny: this asserts that a combination *runs and
 produces finite coordinates*, not that it embeds well.
@@ -34,8 +35,10 @@ from hypegrl.representations import (
     HyperboloidRepresentation,
     PolarRepresentation,
     TangentRepresentation,
-    representation_options,
 )
+
+R = np.array([1.0])
+V = np.array([[1.0, 0.0]])
 
 CHARTS = ["polar", "exact_polar", "curved_polar", "tangent", "ball", "hyperboloid"]
 
@@ -129,15 +132,26 @@ def test_max_norm_asked_of_a_chart_without_one_is_rejected(graph):
         emb.fit(graph)
 
 
-def test_representation_options_reports_what_each_chart_understands():
-    """The signature is the single source of truth for a chart's options."""
-    assert representation_options(PolarRepresentation) == {"device"}
-    assert representation_options(BallRepresentation) == {"device"}
-    assert representation_options(TangentRepresentation) == {"device"}
-    assert representation_options(HyperboloidRepresentation) == {"device", "max_norm"}
-    assert representation_options(ExactPolarRepresentation) == {"device", "max_step"}
-    assert representation_options(CurvedPolarRepresentation) == {
-        "device", "max_step", "chart_curvature"}
+@pytest.mark.parametrize("rep_cls, option", [
+    (HyperboloidRepresentation, "max_norm"),
+    (ExactPolarRepresentation, "max_step"),
+    (CurvedPolarRepresentation, "chart_curvature"),
+])
+def test_each_chart_takes_its_own_options(rep_cls, option):
+    """Its signature is what a chart understands, and the only such record."""
+    assert rep_cls.from_polar(R, V, **{option: 1.0}) is not None
+
+
+@pytest.mark.parametrize("rep_cls", [PolarRepresentation, BallRepresentation,
+                                     TangentRepresentation])
+@pytest.mark.parametrize("option", ["max_norm", "chart_curvature", "max_step"])
+def test_a_chart_rejects_an_option_it_does_not_have(rep_cls, option):
+    """
+    No ``from_polar`` takes ``**kwargs``, so an option meant for another chart
+    is a ``TypeError`` from the call rather than a value quietly discarded.
+    """
+    with pytest.raises(TypeError, match=option):
+        rep_cls.from_polar(R, V, **{option: 1.0})
 
 
 def test_hyperboloid_chart_builds_its_own_manifold_instance():

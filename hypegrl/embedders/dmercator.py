@@ -87,7 +87,6 @@ from hypegrl.representations import (
     PolarRepresentation,
     TangentRepresentation,
     build_representation,
-    check_representation_kwargs,
 )
 
 # Chart in which the Fermi-Dirac refinement runs. Polar is the default because
@@ -317,9 +316,6 @@ class DMercatorEmbedder(HyperbolicEmbedder):
                 rep_cls, X_init, input_chart="ball", device=self.device,
                 **self.representation_kwargs)
         else:
-            # This path bypasses build_representation, so the same check on the
-            # chart options has to happen here.
-            check_representation_kwargs(rep_cls, self.representation_kwargs)
             rep = rep_cls.from_polar(self._r, self._V, device=self.device,
                                      **self.representation_kwargs)
 

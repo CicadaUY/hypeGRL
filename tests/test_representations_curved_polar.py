@@ -324,7 +324,7 @@ def test_representation_kwargs_reach_the_chart():
 
 
 def test_an_option_the_selected_chart_ignores_is_rejected():
-    """A chart option is silently dropped by ``**_`` otherwise — loud is better."""
+    """A chart names the options it takes, so a foreign one cannot slip past."""
     with pytest.raises(TypeError, match="chart_curvature"):
         build_representation(PolarRepresentation, np.array([[0.1, 0.2]]),
                              input_chart="ball", chart_curvature=0.25)

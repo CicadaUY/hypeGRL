@@ -57,7 +57,7 @@ class TangentRepresentation(Representation):
         self._z = geoopt.ManifoldParameter(z.to(dev), manifold=_EUCLIDEAN)
 
     @classmethod
-    def from_polar(cls, r, v, device: str = "cpu", **_) -> "TangentRepresentation":
+    def from_polar(cls, r, v, device: str = "cpu") -> "TangentRepresentation":
         r = as_tensor(r, device).reshape(-1)
         v = as_tensor(v, device)
         v = v / v.norm(dim=-1, keepdim=True).clamp_min(_TINY)
