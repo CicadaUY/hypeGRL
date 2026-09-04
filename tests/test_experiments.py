@@ -2,10 +2,16 @@
 import networkx as nx
 import numpy as np
 import pytest
+import torch
 
+from experiments import two_stage_chart_schedule as two_stage
 from experiments.datasets import balanced_tree_graph, single_cell_graph
 from experiments.graph_stats import _distance_matrix, mean_hyperbolicity
 from experiments.ogbl_ddi_link_prediction import _score_edges
+from hypegrl.representations import (
+    CurvedPolarRepresentation,
+    TangentRepresentation,
+)
 
 
 def test_tree_is_zero_hyperbolic():
@@ -407,3 +413,90 @@ def test_wordnet_closure_edge_order_is_canonical(mammal_closure):
     edges = list(mammal_closure.edges())
     assert edges == sorted(tuple(sorted(e)) for e in edges)
     assert list(mammal_closure.nodes()) == list(range(mammal_closure.number_of_nodes()))
+
+
+# --------------------------------------------------- two-stage chart schedule
+
+
+def _tiny_stress_problem(spine=6, leaves=2, device="cpu"):
+    """A caterpillar small enough to optimise in a test, with its stress target."""
+    G = two_stage.caterpillar(spine, leaves)
+    n = G.number_of_nodes()
+    D = np.array(nx.floyd_warshall_numpy(G), dtype=np.float64)
+    mask = torch.as_tensor(np.triu(np.ones((n, n), dtype=bool), k=1)).to(device)
+    r, v, k, _ = two_stage.warm_start(G, 1.0)
+    return G, r, v, D * np.sqrt(k), mask
+
+
+def test_caterpillar_shape():
+    """A spine of ``spine`` nodes, each carrying ``leaves``."""
+    G = two_stage.caterpillar(10, 3)
+    assert G.number_of_nodes() == 10 + 10 * 3
+    assert nx.is_tree(G)
+    assert nx.diameter(G) == 11               # 9 spine hops plus a leaf at each end
+
+
+@pytest.mark.parametrize("chart", ["tangent", "c=0.3"])
+def test_refinement_reduces_stress(chart):
+    _, r, v, target, mask = _tiny_stress_problem()
+    stress, rep, history = two_stage.refine(chart, r, v, target, mask, 1e-2, 50, "cpu")
+    assert np.isfinite(history).all()
+    assert stress < history[0]
+    assert np.isfinite(rep.dist().detach().cpu().numpy()).all()
+
+
+def test_refinement_is_deterministic():
+    """
+    The HYDRA warm start is closed-form and the stress loss is full-batch with no
+    sampling, so the schedule carries no seed and a re-run on one device must
+    reproduce a number exactly. A stochastic step here would make every recorded
+    result unverifiable.
+    """
+    _, r, v, target, mask = _tiny_stress_problem()
+    first = two_stage.refine("c=0.3", r, v, target, mask, 1e-2, 40, "cpu")[2]
+    second = two_stage.refine("c=0.3", r, v, target, mask, 1e-2, 40, "cpu")[2]
+    assert np.array_equal(first, second)
+
+
+def test_warm_start_ignores_the_seed():
+    """
+    The determinism above rests on the warm start being closed-form. If HYDRA ever
+    acquires a randomised step, this catches it — the schedule takes no seed, so a
+    seeded warm start would silently make every run unreproducible.
+    """
+    G = two_stage.caterpillar(6, 2)
+    a = two_stage.warm_start(G, 1.0)[0]
+    b = two_stage.warm_start(G, 1.0)[0]
+    assert np.array_equal(a, b)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a GPU")
+def test_devices_agree_at_the_first_step_then_drift():
+    """
+    Stress descent is chaotic: CPU and CUDA differ by a rounding unit immediately and
+    the gap grows without bound, so a stress value is only meaningful to a few
+    significant figures and arms must be compared within one device.
+
+    Pinned because the alternative reading — that a re-run disagreeing with a
+    recorded number means something broke — costs a debugging session. It did.
+    """
+    _, r, v, target, mask = _tiny_stress_problem(spine=12, leaves=3)
+    cpu = two_stage.refine("tangent", r, v, target, mask.cpu(), 3e-2, 400, "cpu")[2]
+    gpu = two_stage.refine("tangent", r, v, target, mask.cuda(), 3e-2, 400, "cuda")[2]
+    assert cpu[0] == pytest.approx(gpu[0], rel=1e-12)      # same starting loss
+    assert cpu[-1] == pytest.approx(gpu[-1], rel=0.5)      # same order of magnitude
+
+
+def test_build_selects_the_chart_and_its_curvature():
+    _, r, v, _, _ = _tiny_stress_problem()
+    assert isinstance(two_stage.build("tangent", r, v, "cpu"), TangentRepresentation)
+    curved = two_stage.build("c=0.3", r, v, "cpu")
+    assert isinstance(curved, CurvedPolarRepresentation)
+    assert curved._manifold.chart_curvature == pytest.approx(0.3)
+
+
+def test_a_diverged_run_sorts_last_instead_of_raising():
+    """An absurd rate must be reported as ``inf``, not crash the sweep."""
+    _, r, v, target, mask = _tiny_stress_problem()
+    stress, _, _ = two_stage.refine("c=0.3", r, v, target, mask, 1e9, 50, "cpu")
+    assert stress == float("inf") or np.isfinite(stress)

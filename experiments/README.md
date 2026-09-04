@@ -29,7 +29,9 @@ pip install -r experiments/requirements.txt   # experiment-only extras
 | `datasets.py` | yes | Paper dataset loaders (single-cell k-NN graphs, airport networks, OpenFlights) |
 | `link_prediction_experiment.py` | yes | Table I link-prediction runner (`run_table_i()`) |
 | `graph_stats.py` | yes | Per-graph descriptors (e.g. Gromov `delta_mean`) reported alongside the tables |
+| `two_stage_chart_schedule.py` | yes | Coarse/fine chart schedule under the stress loss (`--graph`) |
 | `data/single_cell/` | yes | Small vendored CSVs (see that folder's README) |
+| `data/phylogeny/` | yes | Small vendored Open Tree of Life clade trees (see that folder's README) |
 | `data/` (other) | no | Download-on-demand caches (OpenFlights, torch_geometric Airports) — gitignored |
 | `results/` | no | All run outputs — gitignored, see below |
 

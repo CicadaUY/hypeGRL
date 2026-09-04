@@ -31,3 +31,4 @@ experiments/results/
 # vendored single-cell CSVs are the exception and stay tracked.
 experiments/data/*
 !experiments/data/single_cell/
+!experiments/data/phylogeny/
