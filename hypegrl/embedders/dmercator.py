@@ -81,11 +81,13 @@ from hypegrl.inference.riemannian_optimizer import riemannian_optimize
 from hypegrl.manifolds.poincare import POINCARE_BALL
 from hypegrl.representations import (
     BallRepresentation,
+    CurvedPolarRepresentation,
     ExactPolarRepresentation,
     HyperboloidRepresentation,
     PolarRepresentation,
     TangentRepresentation,
     build_representation,
+    check_representation_kwargs,
 )
 
 # Chart in which the Fermi-Dirac refinement runs. Polar is the default because
@@ -94,6 +96,7 @@ from hypegrl.representations import (
 _REPRESENTATIONS = {
     "polar": PolarRepresentation,
     "exact_polar": ExactPolarRepresentation,
+    "curved_polar": CurvedPolarRepresentation,
     "tangent": TangentRepresentation,
     "ball": BallRepresentation,
     "hyperboloid": HyperboloidRepresentation,
@@ -192,6 +195,7 @@ class DMercatorEmbedder(HyperbolicEmbedder):
         random_state: Optional[int] = None,
         d1_init: str = "le",
         representation: str = "polar",
+        representation_kwargs: Optional[dict] = None,
     ):
         if d < 2:
             raise ValueError("d must be >= 2 (sphere dimension D = d-1 >= 1).")
@@ -211,6 +215,9 @@ class DMercatorEmbedder(HyperbolicEmbedder):
         self.random_state = random_state
         self.d1_init = d1_init
         self.representation = representation
+        # Options for the selected chart (e.g. chart_curvature for curved_polar);
+        # a key that chart does not accept is rejected when the chart is built.
+        self.representation_kwargs = dict(representation_kwargs or {})
 
         # Fitted state
         self._X: Optional[np.ndarray] = None           # (N, d) Poincaré ball
@@ -307,9 +314,14 @@ class DMercatorEmbedder(HyperbolicEmbedder):
         rep_cls = _REPRESENTATIONS[self.representation]
         if X_init is not None:
             rep = build_representation(
-                rep_cls, X_init, input_chart="ball", device=self.device)
+                rep_cls, X_init, input_chart="ball", device=self.device,
+                **self.representation_kwargs)
         else:
-            rep = rep_cls.from_polar(self._r, self._V, device=self.device)
+            # This path bypasses build_representation, so the same check on the
+            # chart options has to happen here.
+            check_representation_kwargs(rep_cls, self.representation_kwargs)
+            rep = rep_cls.from_polar(self._r, self._V, device=self.device,
+                                     **self.representation_kwargs)
 
         # ── Refinement: Riemannian Adam in the chosen chart ────────────────
         # The decoder pulls the pairwise distance from the representation, so the

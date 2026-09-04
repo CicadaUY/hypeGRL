@@ -1303,24 +1303,25 @@ def test_lorentz_embeddings_stable_on_deep_tree():
     assert np.isfinite(H).all()
     assert _on_hyperboloid(H)
     spatial_norm = np.sqrt((H[:, 1:] ** 2).sum(axis=1))
-    assert spatial_norm.max() <= emb.max_norm + 1e-6
+    assert spatial_norm.max() <= LORENTZ.max_norm + 1e-6
 
 
 def test_lorentz_embeddings_max_norm_configurable():
-    # max_norm is a per-instance knob (own StableLorentz, not the shared
-    # LORENTZ): a small value must actively bound the spatial norm, and it must
-    # not leak onto the shared instance.
+    # max_norm is the hyperboloid chart's option, reaching the fit through
+    # representation_kwargs: a small value must actively bound the spatial
+    # norm, and the chart's own instance must not leak onto the shared LORENTZ.
     before = LORENTZ.max_norm
     G = nx.balanced_tree(2, 5)
     emb = LorentzEmbeddingsEmbedder(
-        d=2, max_norm=5.0, lr_X=1.0, n_steps=400, log_every=0, random_state=0,
+        d=2, lr_X=1.0, n_steps=400, log_every=0, random_state=0,
+        representation_kwargs={"max_norm": 5.0},
     )
     emb.fit(G)
     H = emb.hyperboloid_embeddings()
     spatial_norm = np.sqrt((H[:, 1:] ** 2).sum(axis=1))
     assert spatial_norm.max() <= 5.0 + 1e-6
     assert spatial_norm.max() > 4.0          # the clamp is genuinely binding
-    assert emb.manifold.max_norm == 5.0
+    assert emb.embeddings_representation()._manifold.max_norm == 5.0
     assert LORENTZ.max_norm == before        # shared instance untouched
 
 

@@ -29,8 +29,16 @@ learning rate). The default ``1e3`` dominated the reference's ``1e2`` across
 that sweep (equal on trees, which never reach it; ``+0.8`` AUC on denser graphs
 that do) while staying three orders clear of the runaway regime. At
 ``max_norm=1e3`` the reachable Poincaré radius is ``≈ 0.999``, so leaves still
-sit essentially on the boundary. It is exposed as a constructor argument (here
-and on ``LorentzEmbeddingsEmbedder``) because the optimum is graph-dependent.
+sit essentially on the boundary. Because the optimum is graph-dependent it is a
+constructor argument here, reaching a fit through the hyperboloid chart's
+``from_polar`` — so a method selects it with
+``representation_kwargs={"max_norm": ...}``.
+
+No reference prescribes a value, or the clamp itself. The paper (§3.2)
+introduces no norm bound and argues the Lorentz distance *avoids* the
+instabilities of the Poincaré fraction; its only numerical device is the
+near-origin initialisation. The clamp follows the reference implementation's
+renorm, and the value is hypeGRL's own.
 
 The clamp is a no-op for points already inside ``max_norm`` (small graphs never
 reach it), and is defined here on the manifold — not inside an embedder — so

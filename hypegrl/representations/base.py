@@ -54,8 +54,15 @@ The metric column is the substantive choice; the last two columns are how
                   + Sphere(v)
     tangent       Euclidean(z = r·v)                z-norm scaling       r ≈ 350
     exact_polar   WarpedPolarHyperboloid            exact, sinh²r        r ≈ 350
+    curved_polar  WarpedPolarHyperboloid(c)         warped, w_c(r)²      r ≈ 350
     ball          PoincareBall                      exact (conformal)    r ≈ 8.4
     hyperboloid   StableLorentz                     exact (Minkowski)    r ≈ 7.6
+
+``curved_polar`` makes the metric column a continuum rather than a set of
+cases: its ``chart_curvature`` runs from ``exact_polar``'s exact warp at
+``c = 1`` down towards ``tangent``'s flat one, without changing the distance
+the loss decodes (see
+:class:`~hypegrl.representations.polar.CurvedPolarRepresentation`).
 
 The polar chart's radius is the one parameter that is not the coordinate itself:
 ``r = softplus(u)`` tapers the radial step near the origin, deliberately (see
@@ -112,6 +119,7 @@ its own optimisation loop.
 
 from __future__ import annotations
 
+import inspect
 from abc import ABC, abstractmethod
 
 import numpy as np
@@ -148,6 +156,49 @@ def zero_diagonal(D: torch.Tensor) -> torch.Tensor:
     return D.masked_fill(eye, 0.0)
 
 
+def representation_options(rep_cls: "type[Representation]") -> set[str]:
+    """
+    The chart options ``rep_cls.from_polar`` names, excluding the coordinates.
+
+    Every ``from_polar`` ends in ``**_``, so a keyword it does not name is
+    accepted and dropped. That is what lets the shared plumbing pass a caller's
+    options through without branching on which chart was selected, and it means
+    the signature is the only place that records what a chart understands —
+    which is what this reads. Answers "what may I put in
+    ``representation_kwargs`` for this chart?", and backs the check that
+    enforces it.
+    """
+    named = {
+        name for name, p in inspect.signature(rep_cls.from_polar).parameters.items()
+        if p.kind not in (p.VAR_KEYWORD, p.VAR_POSITIONAL)
+    }
+    return named - {"r", "v"}
+
+
+def check_representation_kwargs(rep_cls: "type[Representation]", cfg: dict) -> None:
+    """
+    Raise ``TypeError`` if ``cfg`` holds an option ``rep_cls`` does not accept.
+
+    For a user's ``representation_kwargs`` the silent drop described in
+    :func:`representation_options` is a trap: an option meant for one chart
+    would vanish under another, and the fit would run with a default the user
+    thought they had replaced — ``max_norm`` under a chart with no spatial norm
+    to clamp, say. Checking it against the chosen class turns that into an
+    error naming both.
+
+    Every chart option has exactly one source, the caller's
+    ``representation_kwargs``, so this rule is uniform: no embedder contributes
+    options of its own, and none is exempt.
+    """
+    accepted = representation_options(rep_cls)
+    unknown = sorted(set(cfg) - accepted)
+    if unknown:
+        raise TypeError(
+            f"{rep_cls.__name__} does not accept {', '.join(unknown)}; it takes "
+            f"{sorted(accepted)}. Chart options only apply to the chart "
+            "selected by representation=.")
+
+
 def build_representation(
     rep_cls: "type[Representation]",
     X_init,
@@ -163,9 +214,15 @@ def build_representation(
     so an exact large-radius warm start survives without ball saturation — or a
     coordinate array in ``input_chart`` (the embedder's native input chart,
     ``"ball"`` or ``"hyperboloid"``), ingested via the matching ``from_*``
-    constructor. ``cfg`` is forwarded to the constructor (e.g. ``max_norm`` for
-    the hyperboloid).
+    constructor.
+
+    ``cfg`` is forwarded to the constructor — the chart-specific options an
+    embedder's ``representation_kwargs`` carries, e.g. ``max_norm`` for the
+    hyperboloid or ``chart_curvature`` for the curved polar chart. Every
+    key the chosen class does not name is rejected (see
+    :func:`check_representation_kwargs`) rather than silently ignored.
     """
+    check_representation_kwargs(rep_cls, cfg)
     if hasattr(X_init, "to_polar"):
         r, v = X_init.to_polar()
         return rep_cls.from_polar(r, v, device=device, **cfg)
@@ -298,4 +355,6 @@ class Representation(ABC):
         return polar_to_hyperboloid_torch(*self.to_polar())
 
 
-__all__ = ["Representation", "as_tensor", "build_representation", "zero_diagonal"]
+__all__ = ["Representation", "as_tensor", "build_representation",
+           "check_representation_kwargs", "representation_options",
+           "zero_diagonal"]

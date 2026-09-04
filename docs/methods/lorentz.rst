@@ -134,8 +134,17 @@ A sweep over trees, karate and Les Misérables found a usable window of roughly
 reconstruction, while very large values (:math:`\gtrsim 10^6`) let the
 optimisation run away and degrade quality. The default :math:`10^3` (Poincaré
 radius :math:`\approx 0.999`) improves on the reference's :math:`10^2` on denser
-graphs while staying clear of the runaway regime; it is exposed as the
-``max_norm`` constructor argument because the optimum is graph-dependent.
+graphs while staying clear of the runaway regime.
+
+Because the clamp acts through the manifold's projection and retraction, it is a
+property of the hyperboloid *chart* rather than of the method, and it is set as
+a chart option::
+
+    LorentzEmbeddingsEmbedder(d=2, representation_kwargs={"max_norm": 1e3})
+
+The optimum is graph-dependent, so it is worth tuning. Selecting a different
+chart with ``representation=`` leaves no spatial norm to clamp, and asking for
+``max_norm`` there raises ``TypeError`` rather than being quietly ignored.
 
 Partially observed graphs
 -------------------------
@@ -184,7 +193,11 @@ a few deliberate ways:
 - **Defaults are tuned, not paper values.** ``lr_X=0.3`` / ``n_steps=2000`` are
   chosen so leaves reach large radius (a timid rate leaves the embedding
   under-spread and reconstruction several AUC points worse); ``max_norm=1e3`` is
-  the sweep-tuned clamp discussed above (the reference uses ``1e2``).
+  the sweep-tuned clamp discussed above. The paper prescribes no clamp at all —
+  it argues (§3.2) that the Lorentz distance avoids the instabilities of the
+  Poincaré fraction, and its only numerical device is the near-origin
+  initialisation. The clamp follows the reference implementation, which uses
+  :math:`10^2`; the value is ours.
 
 API reference
 -------------

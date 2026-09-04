@@ -121,7 +121,7 @@ _TINY = 1e-15
 
 class WarpedPolarHyperboloid(geoopt.Manifold):
     """
-    H^{D+1} in geodesic-polar coordinates, with its **exact** warped metric.
+    Geodesic-polar coordinates on H^{D+1}, carrying a warped-product metric.
 
     A point is the packed tensor ``x = [r, v]`` of shape ``(..., D+2)``: the
     radius ``r ≥ 0`` followed by the unit direction ``v ∈ S^D``. The metric is
@@ -129,65 +129,117 @@ class WarpedPolarHyperboloid(geoopt.Manifold):
 
     .. math::
 
-        g = dr^2 + \\sinh^2(r)\\, g_{S^D},
+        g_c = dr^2 + w_c(r)^2 g_{S^D},
+        \\qquad w_c(r) = \\frac{\\sinh(\\sqrt{c}\\,r)}{\\sqrt{c}},
 
-    i.e. ``ℝ₊ ×_{sinh} S^D``. The ``sinh²r`` warp couples the two factors, so
-    they must live on **one** manifold (a single ``ManifoldParameter``) rather
-    than on a ``Euclidean`` × ``Sphere`` pair — optimising that pair applies the
-    *product* metric ``dr² + ⟨dv,dv⟩``, which drops the warp and drives the
-    angular coordinate as if it were flat (under-driving at small radius,
-    overshooting at large radius under a shared learning rate).
+    i.e. ``ℝ₊ ×_{w_c} S^D``, where ``c`` is ``chart_curvature``. At the default
+    ``c = 1`` the warp is ``sinh r`` and this is the **exact** metric of
+    H^{D+1}. The warp couples the two factors at every ``c``, so they must live
+    on **one** manifold (a single ``ManifoldParameter``) rather than on a
+    ``Euclidean`` × ``Sphere`` pair — optimising that pair applies the *product*
+    metric ``dr² + ⟨dv,dv⟩``, which drops the warp and drives the angular
+    coordinate as if it were flat (under-driving at small radius, overshooting
+    at large radius under a shared learning rate).
 
     With the warp restored, every ``RiemannianAdam`` step is a true Riemannian
-    one: :meth:`egrad2rgrad` raises the index with ``G⁻¹ = diag(1, sinh⁻²r·I)``
-    and :meth:`expmap` follows the exact geodesic. That also makes the step
-    **self-regulating** — the geometric length of an update is ``≈ lr`` at every
-    radius, because the second moment normalises by the metric norm — which is
-    what removes the large-radius blow-up the ambient charts suffer.
+    one *for this metric*: :meth:`egrad2rgrad` raises the index with
+    ``G⁻¹ = diag(1, w_c⁻²·I)`` and :meth:`expmap` follows the exact geodesic.
+    That makes the step **self-regulating** — the geometric length of an update
+    is ``≈ lr`` at every radius, because the second moment normalises by the
+    metric norm — which is what removes the large-radius blow-up the ambient
+    charts suffer.
 
-    Numerics: the exponential map is evaluated through ``tanh r`` and a
-    log-space radius increment, so no ``e^r`` or ``cosh r`` ever forms (the same
-    stability trick as :func:`polar_distances`). Curvature is fixed at ``k = 1``.
+    **``chart_curvature`` sets the metric the optimiser steps under, not the
+    geometry of the embedding.** ``g_c`` is a genuine constant-curvature ``−c``
+    metric, but it is used here as a preconditioner: the *loss* keeps decoding
+    the curvature ``−1`` distance of :func:`polar_distances_torch`, which is a
+    function of ``(r, v)`` alone and does not involve ``c``. Lowering ``c``
+    shrinks the warp, so a given angular gradient buys a larger change in the
+    angular *coordinate* at large radius; ``c → 0`` approaches the flat warp
+    ``w = r`` (the tangent chart's scaling), and ``c = 1`` is the exact metric,
+    which at large radius can barely turn a point at all.
+
+    Numerics: the exponential map is evaluated through ``tanh`` and a log-space
+    radius increment, so no ``e^r`` or ``cosh r`` ever forms (the same
+    stability trick as :func:`polar_distances`).
 
     Parameters
     ----------
     max_step:
-        Cap on the geodesic length ``‖u‖_g`` of a single retraction. A safety
-        valve against optimiser transients: it bounds ``cosh s``, which would
-        otherwise overflow float64 at ``s ≈ 710``. With the exact metric the
-        natural step is ``≈ lr``, so this does not bind in normal use — it is
-        not a tuning knob. A step whose length is non-finite leaves the point
-        unchanged. (hypeGRL's engineering choice, not from a reference.)
+        Cap on the length of a single retraction, measured in the variable
+        ``ρ = √c·r`` the exponential map is evaluated in. A safety valve
+        against optimiser transients: it bounds ``cosh s``, which would
+        otherwise overflow float64 at ``s ≈ 710``. With this metric the natural
+        step is ``≈ √c·lr`` in that variable, so it does not bind in normal use
+        — it is not a tuning knob. A step whose length is non-finite leaves the
+        point unchanged. (hypeGRL's engineering choice, not from a reference.)
     eps_warp:
-        Floor on ``sinh²r`` in :meth:`egrad2rgrad`. Polar coordinates are
+        Floor on ``w_c(r)²`` in :meth:`egrad2rgrad`. Polar coordinates are
         genuinely singular at the origin (``v`` is undefined there); the floor
         keeps a node sitting at ``r = 0`` — a tree root, say — at a bounded,
         near-zero angular gradient so it drifts radially instead of producing
         ``NaN``.
+    chart_curvature:
+        The ``c`` above, ``> 0``. Default ``1.0``: the exact metric of the space
+        the distances are measured in. ``c ≤ 0`` is rejected rather than
+        silently treated as flat — the ``c → 0`` member is the tangent chart
+        (:class:`~hypegrl.representations.tangent.TangentRepresentation`), which
+        is a different parametrisation rather than a limit of this one.
     """
 
     name = "WarpedPolarHyperboloid"
     ndim = 1
     reversible = False
 
-    def __init__(self, max_step: float = 30.0, eps_warp: float = 1e-12):
+    def __init__(self, max_step: float = 30.0, eps_warp: float = 1e-12,
+                 chart_curvature: float = 1.0):
         super().__init__()
+        if chart_curvature <= 0:
+            raise ValueError(
+                f"chart_curvature must be positive; got {chart_curvature!r}. "
+                "The c → 0 member of the family is the tangent chart "
+                "(representation='tangent'), not this manifold.")
         self.max_step = max_step
         self.eps_warp = eps_warp
+        self.chart_curvature = float(chart_curvature)
+        self._sqrt_c = self.chart_curvature ** 0.5
 
     @staticmethod
     def _split(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Unpack ``[r, v]``; ``r`` keeps its trailing dim so it broadcasts."""
         return x[..., :1], x[..., 1:]
 
+    def _warp(self, r: torch.Tensor) -> torch.Tensor:
+        """``w_c(r) = sinh(√c·r)/√c`` — the metric's angular scale factor."""
+        return torch.sinh(self._sqrt_c * r) / self._sqrt_c
+
+    # ``ρ = √c·r`` rescales the metric by the constant ``1/c``:
+    # ``g_c = (1/c)·[dρ² + sinh²(ρ)·g_{S^D}]``. A constant factor leaves
+    # geodesics and Christoffel symbols alone, so the exponential map and the
+    # geodesic distance can be evaluated by the ``c = 1`` formulas in ``ρ`` and
+    # read back — only lengths carry the ``1/√c``. The angular coordinate is
+    # untouched by the substitution; the radial component of a *tangent* vector
+    # transforms with it.
+    def _to_rho(self, x: torch.Tensor) -> torch.Tensor:
+        r, v = self._split(x)
+        return torch.cat([self._sqrt_c * r, v], dim=-1)
+
+    def _from_rho(self, y: torch.Tensor) -> torch.Tensor:
+        rho, v = self._split(y)
+        return torch.cat([rho / self._sqrt_c, v], dim=-1)
+
+    def _u_to_rho(self, u: torch.Tensor) -> torch.Tensor:
+        u_r, u_v = self._split(u)
+        return torch.cat([self._sqrt_c * u_r, u_v], dim=-1)
+
     def inner(self, x, u, v=None, *, keepdim=False):
-        """``⟨u, w⟩_x = u_r w_r + sinh²(r) ⟨u_v, w_v⟩`` — the warped metric."""
+        """``⟨u, w⟩_x = u_r w_r + w_c(r)² ⟨u_v, w_v⟩`` — the warped metric."""
         if v is None:
             v = u
         r, _ = self._split(x)
         u_r, u_v = self._split(u)
         w_r, w_v = self._split(v)
-        warp = torch.sinh(r) ** 2
+        warp = self._warp(r) ** 2
         out = u_r * w_r + warp * (u_v * w_v).sum(dim=-1, keepdim=True)
         return out if keepdim else out.squeeze(-1)
 
@@ -201,17 +253,18 @@ class WarpedPolarHyperboloid(geoopt.Manifold):
     def egrad2rgrad(self, x, u):
         """
         The natural gradient ``G⁻¹ P(e)``: project the angular part onto
-        ``T_v S^D``, then divide it by the warp ``sinh²r``.
+        ``T_v S^D``, then divide it by the warp ``w_c(r)²``.
 
         That division is the whole difference from the product metric. It shrinks
         the angular gradient at large radius, compensating exactly for the fact
         that a unit angular coordinate move there is a huge geodesic
-        displacement.
+        displacement — by ``sinh²r`` at the default ``chart_curvature = 1``, and
+        by a milder factor for smaller ``c``.
         """
         r, v = self._split(x)
         e_r, e_v = self._split(u)
         e_v = e_v - (e_v * v).sum(dim=-1, keepdim=True) * v
-        warp = (torch.sinh(r) ** 2).clamp_min(self.eps_warp)
+        warp = (self._warp(r) ** 2).clamp_min(self.eps_warp)
         return torch.cat([e_r, e_v / warp], dim=-1)
 
     def projx(self, x):
@@ -221,21 +274,36 @@ class WarpedPolarHyperboloid(geoopt.Manifold):
 
     def expmap(self, x, u):
         """
-        The exact geodesic of H^{D+1}, in a form that never builds ``e^r``.
+        The exact geodesic of the metric ``g_c``, read off the unit-curvature one.
 
-        The hyperboloid geodesic through ``Φ(r,v) = (cosh r, sinh r·v)`` read
-        back in polar coordinates gives ``cosh r₁`` and ``sinh r₁·v₁`` as
-        combinations of ``cosh r₀``/``sinh r₀``. Dividing both by ``cosh r₀``
-        leaves only ``tanh r₀``-weighted ``O(1)`` quantities::
+        Since ``g_c = (1/c)·g₁`` in ``ρ = √c·r`` and a constant rescale of a
+        metric leaves its geodesics unchanged, the curve is
+        :meth:`_expmap_unit` run in ``ρ`` and converted back. The tangent
+        transforms with the coordinate, so its radial component enters as
+        ``√c·u_r`` while the angular part is unchanged.
+        """
+        return self._from_rho(
+            self._expmap_unit(self._to_rho(x), self._u_to_rho(u)))
 
-            C = cosh s + sinhc(s)·u_r·tanh r₀              ( = cosh r₁ / cosh r₀ )
-            n = (cosh s·tanh r₀ + sinhc(s)·u_r)·v₀
-                + sinhc(s)·tanh r₀·u_v                     ( = sinh r₁ / cosh r₀ · v₁ )
+    def _expmap_unit(self, x, u):
+        """
+        The unit-curvature geodesic in ``(ρ, v)``, in a form that never builds
+        ``e^ρ``.
 
-        with ``s = ‖u‖_g``, so ``v₁ = n/‖n‖`` and the radius comes from the ratio
-        ``e^{r₁}/e^{r₀} = (C + ‖n‖)/(1 + tanh r₀)`` as a log-space increment.
-        A geodesic crossing the origin is handled for free: ``‖n‖ ≥ 0`` and the
-        ``v₀`` coefficient flips sign, so ``v₁`` flips to the antipode.
+        The hyperboloid geodesic through ``Φ(ρ,v) = (cosh ρ, sinh ρ·v)`` read
+        back in polar coordinates gives ``cosh ρ₁`` and ``sinh ρ₁·v₁`` as
+        combinations of ``cosh ρ₀``/``sinh ρ₀``. Dividing both by ``cosh ρ₀``
+        leaves only ``tanh ρ₀``-weighted ``O(1)`` quantities::
+
+            C = cosh s + sinhc(s)·u_ρ·tanh ρ₀              ( = cosh ρ₁ / cosh ρ₀ )
+            n = (cosh s·tanh ρ₀ + sinhc(s)·u_ρ)·v₀
+                + sinhc(s)·tanh ρ₀·u_v                     ( = sinh ρ₁ / cosh ρ₀ · v₁ )
+
+        with ``s = ‖u‖_{g₁}``, so ``v₁ = n/‖n‖`` and the radius comes from the
+        ratio ``e^{ρ₁}/e^{ρ₀} = (C + ‖n‖)/(1 + tanh ρ₀)`` as a log-space
+        increment. A geodesic crossing the origin is handled for free:
+        ``‖n‖ ≥ 0`` and the ``v₀`` coefficient flips sign, so ``v₁`` flips to
+        the antipode.
         """
         r0, v0 = self._split(x)
         u_r, u_v = self._split(u)
@@ -243,7 +311,7 @@ class WarpedPolarHyperboloid(geoopt.Manifold):
         sinh_r0 = torch.sinh(r0)
         tanh_r0 = torch.tanh(r0)
 
-        # geodesic step length ‖u‖_g, capped at max_step (bounds cosh s below)
+        # geodesic step length ‖u‖_{g₁}, capped at max_step (bounds cosh s below)
         s_raw = torch.sqrt(u_r ** 2 + (sinh_r0 * u_v.norm(dim=-1, keepdim=True)) ** 2)
         scale = (self.max_step / s_raw.clamp_min(_TINY)).clamp(max=1.0)
         u_r, u_v = u_r * scale, u_v * scale
@@ -284,14 +352,28 @@ class WarpedPolarHyperboloid(geoopt.Manifold):
         return self.proju(y, v)
 
     def dist(self, x, y, *, keepdim=False):
-        """Geodesic distance, via the same stable law of cosines as
-        :func:`polar_distances` (``cosh d − 1`` as a sum of non-negative terms)."""
-        r0, v0 = self._split(x)
-        r1, v1 = self._split(y)
+        """
+        Geodesic distance **of this manifold's own metric** ``g_c``, via the same
+        stable law of cosines as :func:`polar_distances` (``cosh d − 1`` as a sum
+        of non-negative terms) evaluated in ``ρ = √c·r`` and scaled by
+        ``1/√c``.
+
+        At the default ``chart_curvature = 1`` this is the curvature ``−1``
+        hyperbolic distance, so it is what a loss should decode. **For any other
+        ``chart_curvature`` it is not**: ``g_c`` is a preconditioner, and the
+        embedding still lives in the curvature ``−1`` space, whose distance is
+        :func:`polar_distances_torch` / :func:`polar_distances_between_torch` as
+        a function of ``(r, v)``. Those are what
+        :class:`~hypegrl.representations.polar.CurvedPolarRepresentation`
+        decodes; this method stays consistent with :meth:`inner` and
+        :meth:`expmap` instead, as ``geoopt`` expects of a manifold.
+        """
+        rho0, v0 = self._split(self._to_rho(x))
+        rho1, v1 = self._split(self._to_rho(y))
         chord2 = ((v0 - v1) ** 2).sum(dim=-1, keepdim=True)
-        m = (2.0 * torch.sinh(0.5 * (r0 - r1)) ** 2
-             + 0.5 * torch.sinh(r0) * torch.sinh(r1) * chord2).clamp_min(0.0)
-        d = torch.log1p(m + torch.sqrt(m * (m + 2.0) + 1e-30))
+        m = (2.0 * torch.sinh(0.5 * (rho0 - rho1)) ** 2
+             + 0.5 * torch.sinh(rho0) * torch.sinh(rho1) * chord2).clamp_min(0.0)
+        d = torch.log1p(m + torch.sqrt(m * (m + 2.0) + 1e-30)) / self._sqrt_c
         return d if keepdim else d.squeeze(-1)
 
     def _check_point_on_manifold(self, x, *, atol=1e-5, rtol=1e-5):

@@ -28,13 +28,20 @@ the origin per Eq. 6: ``x' ~ U(-init_scale, init_scale)`` with
 **Numerical stability.** The exponential map scales coordinates by
 ``cosh(||v||_L)``, so one high-learning-rate step toward the boundary can
 overflow ``x_0`` and turn every distance into ``NaN`` — the well-known failure
-of naive hyperboloid optimisation on leaf-heavy graphs. The embedder builds its
-own ``StableLorentz`` (with the ``max_norm`` constructor argument) which clamps
-each point's spatial norm to ``max_norm`` (default ``1e3``, Poincaré radius
-``≈ 0.999``) after every retraction, mirroring the reference implementation's
-``set_dim0`` renorm. This is what lets the embedder use an aggressive learning
-rate (and reach the near-boundary radii that encode generality) without
-diverging.
+of naive hyperboloid optimisation on leaf-heavy graphs. The hyperboloid chart
+guards against it with ``StableLorentz``, which clamps each point's spatial
+norm to ``max_norm`` after every retraction; that is what lets this method use
+an aggressive learning rate (and reach the near-boundary radii that encode
+generality) without diverging. The clamp is a property of that chart, so it is
+set through ``representation_kwargs={"max_norm": ...}`` rather than on the
+embedder — with a different chart there is no such coordinate to clamp.
+
+The clamp is **not** from the paper, which introduces no norm bound and argues
+(§3.2) that the Lorentz distance avoids the Poincaré fraction's instabilities;
+its only numerical device is the near-origin initialisation. It follows the
+reference implementation's ``set_dim0`` renorm, and the recommended
+``max_norm = 1e3`` (Poincaré radius ``≈ 0.999``) is tuned here rather than
+taken from either.
 
 For compatibility with the rest of hypeGRL (disk plotters, downstream code),
 :meth:`embeddings` returns the **Poincaré-ball image** ``(N, d)`` via the
@@ -129,10 +136,11 @@ from torch.utils.checkpoint import checkpoint
 from hypegrl.embedders.base import HyperbolicEmbedder
 from hypegrl.inference.joint_optimizer import joint_optimize
 from hypegrl.inference.riemannian_optimizer import riemannian_optimize
-from hypegrl.manifolds.lorentz import LORENTZ, StableLorentz
+from hypegrl.manifolds.lorentz import LORENTZ
 from hypegrl.manifolds.poincare import poincare_to_lorentz
 from hypegrl.representations import (
     BallRepresentation,
+    CurvedPolarRepresentation,
     ExactPolarRepresentation,
     HyperboloidRepresentation,
     PolarRepresentation,
@@ -144,11 +152,11 @@ from hypegrl.representations import (
 # **hyperboloid** (this method *is* the Lorentz-model instantiation, and the
 # StableLorentz clamp is what makes its aggressive rate safe); polar and ball are
 # selectable for comparison, since the ranking loss is a function of the pairwise
-# distance only. The embedder's ``max_norm`` is forwarded to the chart
-# constructor (only the hyperboloid uses it).
+# distance only. Chart options travel in ``representation_kwargs``.
 _REPRESENTATIONS = {
     "polar": PolarRepresentation,
     "exact_polar": ExactPolarRepresentation,
+    "curved_polar": CurvedPolarRepresentation,
     "tangent": TangentRepresentation,
     "ball": BallRepresentation,
     "hyperboloid": HyperboloidRepresentation,
@@ -515,15 +523,23 @@ class LorentzEmbeddingsEmbedder(HyperbolicEmbedder):
         of the spatial coordinates ``x'`` (with ``x_0 = sqrt(1 + ||x'||^2)``,
         Eq. 6), used when ``X_init`` is not supplied. Default ``1e-3`` follows
         the paper's ``U(-0.001, 0.001)``.
-    max_norm:
-        Spatial-norm clamp of the ``StableLorentz`` manifold this embedder
-        builds. Bounds how far leaves spread (and prevents the hyperboloid
-        overflow). Default ``1e3`` is sweep-tuned; it caps the reachable radius
-        but also regularises spread — too small binds below the natural radius
-        and hurts, too large (``≳1e6``) lets the fit run away. See the
-        ``manifolds.lorentz`` docstring.
     random_state:
         Seed for reproducible initialisation and negative sampling.
+    representation:
+        Chart the embedding is optimised in; ``"hyperboloid"`` by default, this
+        method's own model. The ranking loss reads only pairwise distances, so
+        any chart of the same space is admissible.
+    representation_kwargs:
+        Options for that chart. **The one worth setting here is the
+        hyperboloid's** ``max_norm``, the spatial-norm clamp that bounds how
+        far leaves spread and prevents the overflow described above:
+        ``representation_kwargs={"max_norm": 1e3}``. ``1e3`` (Poincaré radius
+        ``≈ 0.999``) is the recommended value and the chart's own default, so
+        it applies unless overridden; the optimum is graph-dependent, with a
+        usable window around ``1e2``–``1e4`` — too small binds below the
+        natural radius and hurts, too large (``≳1e6``) lets the fit run away.
+        An option the selected chart does not accept raises ``TypeError``
+        rather than being silently dropped.
 
     Examples
     --------
@@ -551,9 +567,9 @@ class LorentzEmbeddingsEmbedder(HyperbolicEmbedder):
         log_every: int = 50,
         device: str = "cpu",
         init_scale: float = 1e-3,     # paper: U(-0.001, 0.001)
-        max_norm: float = 1e3,        # sweep-tuned (reference uses 1e2)
         random_state: Optional[int] = None,
         representation: str = "hyperboloid",
+        representation_kwargs: Optional[dict] = None,
     ):
         if representation not in _REPRESENTATIONS:
             raise ValueError(
@@ -569,15 +585,18 @@ class LorentzEmbeddingsEmbedder(HyperbolicEmbedder):
         self.log_every      = log_every
         self.device         = device
         self.init_scale     = init_scale
-        self.max_norm       = max_norm
         self.random_state   = random_state
         self.representation = representation
+        # Options for the selected chart — for the default hyperboloid, the
+        # max_norm clamp (see the class docstring). A key the chart does not
+        # accept is rejected when the chart is built.
+        self.representation_kwargs = dict(representation_kwargs or {})
 
-        # Per-instance manifold so max_norm is tunable without mutating the
-        # shared LORENTZ. Stateless besides (k, max_norm), so this is cheap.
-        # Used by decode() and the X-based distance(); the hyperboloid
-        # representation builds its own StableLorentz with the same max_norm.
-        self.manifold = StableLorentz(max_norm=max_norm)
+        # Used by decode() and the X-based distance(), which only need the
+        # Lorentz distance. That is inherited unclamped from geoopt, so the
+        # shared instance serves: max_norm acts through projx/retr, i.e. only
+        # on the optimisation, and belongs to the chart that does the stepping.
+        self.manifold = LORENTZ
 
         self._rep = None                                   # fitted Representation
         self._X: Optional[np.ndarray]              = None   # Poincaré ball (N, d)
@@ -638,12 +657,12 @@ class LorentzEmbeddingsEmbedder(HyperbolicEmbedder):
         self._unknown_mask = self._build_unknown_mask(N, unknown_edges)
 
         # Build the representation (chosen chart) from the hyperboloid warm start
-        # (or an incoming Representation of any chart). max_norm is forwarded to
-        # the constructor; only the hyperboloid chart uses it. The ranking loss
-        # pulls rep.dist(), so it is chart-agnostic.
+        # (or an incoming Representation of any chart). The ranking loss pulls
+        # rep.dist(), so it is chart-agnostic.
         rep = build_representation(
             _REPRESENTATIONS[self.representation], X_init,
-            input_chart="hyperboloid", device=self.device, max_norm=self.max_norm,
+            input_chart="hyperboloid", device=self.device,
+            **self.representation_kwargs,
         )
 
         def loss_fn(rep_, A_t: torch.Tensor) -> torch.Tensor:

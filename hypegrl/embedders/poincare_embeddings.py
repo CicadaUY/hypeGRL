@@ -75,6 +75,7 @@ from hypegrl.inference.riemannian_optimizer import riemannian_optimize
 from hypegrl.manifolds.poincare import POINCARE_BALL
 from hypegrl.representations import (
     BallRepresentation,
+    CurvedPolarRepresentation,
     ExactPolarRepresentation,
     HyperboloidRepresentation,
     PolarRepresentation,
@@ -89,6 +90,7 @@ from hypegrl.representations import (
 _REPRESENTATIONS = {
     "polar": PolarRepresentation,
     "exact_polar": ExactPolarRepresentation,
+    "curved_polar": CurvedPolarRepresentation,
     "tangent": TangentRepresentation,
     "ball": BallRepresentation,
     "hyperboloid": HyperboloidRepresentation,
@@ -482,6 +484,7 @@ class PoincareEmbeddingsEmbedder(HyperbolicEmbedder):
         init_scale: float = 1e-4,     # reference-code default (paper uses 1e-3)
         random_state: Optional[int] = None,
         representation: str = "ball",
+        representation_kwargs: Optional[dict] = None,
     ):
         if loss not in ("ranking", "fermi_dirac"):
             raise ValueError(
@@ -493,6 +496,9 @@ class PoincareEmbeddingsEmbedder(HyperbolicEmbedder):
                 f"got {representation!r}.")
 
         self.representation       = representation
+        # Options for the selected chart (e.g. chart_curvature for curved_polar);
+        # a key that chart does not accept is rejected when the chart is built.
+        self.representation_kwargs = dict(representation_kwargs or {})
         self.d                    = d
         self.loss                 = loss
         self.n_negatives          = n_negatives
@@ -579,7 +585,7 @@ class PoincareEmbeddingsEmbedder(HyperbolicEmbedder):
         # rep.dist(), so it is chart-agnostic; embeddings() reads the ball image.
         rep = build_representation(
             _REPRESENTATIONS[self.representation], X_init,
-            input_chart="ball", device=self.device,
+            input_chart="ball", device=self.device, **self.representation_kwargs,
         )
         loss_history: list[float] = []
         a_cur = a_omega_init

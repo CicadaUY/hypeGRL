@@ -14,6 +14,12 @@ at larger radius is squashed on construction. To expose the *distance* failure
 (rather than the clamp) in the comparison, build with a large ``max_norm``
 (e.g. ``1e18``, ``r ≤ ~42``).
 
+It is this chart's option, and the only one an embedder is likely to set:
+``representation_kwargs={"max_norm": ...}``. It acts through ``projx`` and the
+retraction, i.e. on the optimisation alone — the Lorentz ``dist`` is inherited
+unclamped — so it means nothing to a chart that does not step on the
+hyperboloid, and is not accepted by one.
+
 This is the **only** representation that owns its manifold (``self._manifold``),
 because ``StableLorentz`` is the only one with per-instance state: ``max_norm`` is
 graph-dependent (tuned per fit) and drives ``RiemannianAdam``'s retraction, so a

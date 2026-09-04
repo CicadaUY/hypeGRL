@@ -50,6 +50,7 @@ from hypegrl.embedders.hydra import HydraEmbedder, _poincare_cartesian_to_polar
 from hypegrl.inference.riemannian_optimizer import riemannian_optimize
 from hypegrl.representations import (
     BallRepresentation,
+    CurvedPolarRepresentation,
     ExactPolarRepresentation,
     HyperboloidRepresentation,
     PolarRepresentation,
@@ -65,6 +66,7 @@ from hypegrl.representations import (
 _REPRESENTATIONS = {
     "polar": PolarRepresentation,
     "exact_polar": ExactPolarRepresentation,
+    "curved_polar": CurvedPolarRepresentation,
     "tangent": TangentRepresentation,
     "ball": BallRepresentation,
     "hyperboloid": HyperboloidRepresentation,
@@ -122,6 +124,7 @@ class HydraPlusEmbedder(HydraEmbedder):
         device:       str            = "cpu",
         random_state: Optional[int]  = None,
         representation: str          = "polar",
+        representation_kwargs: Optional[dict] = None,
     ):
         super().__init__(
             dim=dim,
@@ -141,6 +144,9 @@ class HydraPlusEmbedder(HydraEmbedder):
         self.device         = device
         self.random_state   = random_state
         self.representation = representation
+        # Options for the selected chart (e.g. chart_curvature for curved_polar);
+        # a key that chart does not accept is rejected when the chart is built.
+        self.representation_kwargs = dict(representation_kwargs or {})
 
         self._rep = None                          # fitted Representation
         # Additional fitted state (refinement-specific)
@@ -212,7 +218,7 @@ class HydraPlusEmbedder(HydraEmbedder):
 
         rep = build_representation(
             _REPRESENTATIONS[self.representation], X_warm,
-            input_chart="ball", device=self.device,
+            input_chart="ball", device=self.device, **self.representation_kwargs,
         )
 
         def loss_fn(rep_, s_A_t: torch.Tensor) -> torch.Tensor:

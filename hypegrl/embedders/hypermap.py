@@ -63,6 +63,7 @@ from hypegrl.manifolds.poincare import (
 )
 from hypegrl.representations import (
     BallRepresentation,
+    CurvedPolarRepresentation,
     ExactPolarRepresentation,
     HyperboloidRepresentation,
     PolarRepresentation,
@@ -77,6 +78,7 @@ from hypegrl.representations import (
 _REPRESENTATIONS = {
     "polar": PolarRepresentation,
     "exact_polar": ExactPolarRepresentation,
+    "curved_polar": CurvedPolarRepresentation,
     "tangent": TangentRepresentation,
     "ball": BallRepresentation,
     "hyperboloid": HyperboloidRepresentation,
@@ -352,6 +354,7 @@ class HyperMapEmbedder(HyperbolicEmbedder):
         device: str = "cpu",
         verbose_init: bool = True,
         representation: str = "polar",
+        representation_kwargs: Optional[dict] = None,
     ):
         if representation not in _REPRESENTATIONS:
             raise ValueError(
@@ -373,6 +376,9 @@ class HyperMapEmbedder(HyperbolicEmbedder):
         self.device         = device
         self.verbose_init   = verbose_init
         self.representation = representation
+        # Options for the selected chart (e.g. chart_curvature for curved_polar);
+        # a key that chart does not accept is rejected when the chart is built.
+        self.representation_kwargs = dict(representation_kwargs or {})
 
         self._rep = None                                     # fitted Representation
         self._X             : Optional[np.ndarray]           = None
@@ -461,7 +467,7 @@ class HyperMapEmbedder(HyperbolicEmbedder):
         # projection. Rows stay in degree-descending (nodes_sorted) order.
         rep = build_representation(
             _REPRESENTATIONS[self.representation], X_init,
-            input_chart="ball", device=self.device,
+            input_chart="ball", device=self.device, **self.representation_kwargs,
         )
 
         # ── Stage 2: gradient refinement ─────────────────────────────────

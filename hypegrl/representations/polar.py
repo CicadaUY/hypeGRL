@@ -14,6 +14,14 @@ negative and make ``sinh r`` invalid. It is not only a positivity device: it
 also tapers the radial step near the origin, which is documented on
 :class:`PolarRepresentation`. Model-agnostic: **no κ** (that is a D-Mercator
 readout computed from ``r`` with the model's global params).
+
+Three classes share these coordinates and differ only in the metric the
+optimiser steps under: :class:`PolarRepresentation` (the product metric
+``dr² + ⟨dv,dv⟩``), :class:`ExactPolarRepresentation` (the true metric
+``dr² + sinh²(r)·g_{S^D}``), and :class:`CurvedPolarRepresentation`, which
+carries the one-parameter family joining the second to the flat warp and so
+makes that axis continuous. All three decode the same curvature ``−1``
+distance, so they share their minima and differ only in the path taken.
 """
 
 from __future__ import annotations
@@ -194,8 +202,119 @@ class ExactPolarRepresentation(Representation):
 
     def dist_between(self, i_idx: torch.Tensor, j_idx: torch.Tensor) -> torch.Tensor:
         # self._x is kept on-manifold (v unit-norm) by projx/expmap, so the
-        # manifold's own elementwise dist needs no _unpack renormalisation.
+        # manifold's own elementwise dist needs no _unpack renormalisation. At
+        # this chart's unit curvature the manifold's metric is the embedding's,
+        # so its dist is the distance the loss wants.
         return self._manifold.dist(self._x[i_idx], self._x[j_idx])
 
 
-__all__ = ["PolarRepresentation", "ExactPolarRepresentation"]
+class CurvedPolarRepresentation(Representation):
+    """
+    Polar chart optimised under a **tunable** warped metric.
+
+    Same chart, same points and the same ``dist()`` as
+    :class:`PolarRepresentation` and :class:`ExactPolarRepresentation` — what
+    changes is the metric ``RiemannianAdam`` steps under. ``(r, v)`` is packed
+    into one point on
+    :class:`~hypegrl.manifolds.polar.WarpedPolarHyperboloid` carrying
+
+    .. math::
+
+        g_c = dr^2 + w_c(r)^2 g_{S^D},
+        \\qquad w_c(r) = \\frac{\\sinh(\\sqrt{c}\\,r)}{\\sqrt{c}},
+
+    so the angular gradient is divided by ``w_c(r)²`` and the retraction is that
+    metric's exact geodesic. ``chart_curvature = c`` places the chart on a
+    continuum whose endpoints are already shipped: ``c = 1`` is exactly
+    :class:`ExactPolarRepresentation` (the true metric of the space), and
+    ``c → 0`` approaches the flat warp ``w = r`` that
+    :class:`~hypegrl.representations.tangent.TangentRepresentation` scales its
+    steps by. :class:`PolarRepresentation` is *not* on this continuum: its
+    product metric ``dr² + ⟨dv,dv⟩`` is a cylinder, no member of the family.
+
+    **This does not change the geometry of the embedding.** ``g_c`` is a genuine
+    constant-curvature ``−c`` metric, but it is used here only as a
+    preconditioner: :meth:`dist` returns the curvature ``−1`` distance at every
+    ``c``, so the objective is untouched and two runs at different ``c`` are
+    directly comparable. The space being embedded into is fixed, as it is for
+    every other chart; ``c`` decides how the optimiser moves within it.
+
+    **What ``c`` buys.** Turning by ``δθ`` at radius ``r`` costs an arc of
+    ``w_c(r)·δθ``, and ``RiemannianAdam`` spends a fixed budget per step, so the
+    angular coordinate can change by about ``lr/w_c(r)``. At ``c = 1`` that
+    factor collapses exponentially, which is why the exact metric barely turns a
+    point at large radius; a smaller ``c`` flattens the warp and restores
+    angular motion while keeping a radius-aware step, which the product metric
+    does not have.
+
+    **The default ``c = 1/4`` is derived rather than fitted, and the derivation
+    states its own range of validity.** The angular factor of the arc formula,
+    ``sinh(r)/w_c(r)²``, behaves like ``2c·e^{(1−2√c)r}``: it grows without
+    bound for ``c < 1/4``, decays to zero for ``c > 1/4``, and at ``c = 1/4`` is
+    exactly ``½·coth(r/2) → ½`` — independent of radius, so a given angular
+    gradient buys the same coordinate step wherever the node sits. Two limits
+    come with that. It assumes the crowded regime ``sinh(r)·δθ ≪ 1``, where a
+    pairwise-distance loss has ``∂_θ d ≈ sinh r``; in the opposite, wide-gap
+    regime ``∂_θ d`` is radius-free and it is :class:`PolarRepresentation`'s
+    flat product metric that is balanced instead. And it is an argument about
+    gradient magnitudes, which ``RiemannianAdam`` partly normalises away. So it
+    is a principled starting point, not an optimum — nothing here says one
+    value suits every graph, and ``c`` is worth sweeping.
+
+    Parameters
+    ----------
+    chart_curvature:
+        The ``c`` above, ``> 0``; default ``0.25``. Named for what it is — the
+        curvature of the *chart's* metric — and deliberately not ``curvature``,
+        which in an embedder means the curvature of the space being embedded
+        into and is a different quantity entirely. Values below ``1`` flatten
+        the warp; ``c ≤ 0`` raises (see the manifold).
+    max_step:
+        Forwarded to the manifold; a non-binding safety cap on the length of
+        one step (see that class).
+    """
+
+    def __init__(self, r, v, device: str = "cpu", chart_curvature: float = 0.25,
+                 max_step: float = 30.0):
+        r = as_tensor(r, device).reshape(-1, 1).clamp_min(0.0)
+        v = as_tensor(v, device)
+        v = v / v.norm(dim=-1, keepdim=True).clamp_min(_TINY)
+        self._manifold = WarpedPolarHyperboloid(
+            max_step=max_step, chart_curvature=chart_curvature)
+        self._x = geoopt.ManifoldParameter(
+            torch.cat([r, v], dim=-1), manifold=self._manifold)
+
+    @classmethod
+    def from_polar(cls, r, v, device: str = "cpu", chart_curvature: float = 0.25,
+                   max_step: float = 30.0, **_) -> "CurvedPolarRepresentation":
+        return cls(r, v, device=device, chart_curvature=chart_curvature,
+                   max_step=max_step)
+
+    def _unpack(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """``(r, v)`` off the packed parameter, differentiably."""
+        r = self._x[..., 0].clamp_min(0.0)
+        v = self._x[..., 1:]
+        return r, v / v.norm(dim=-1, keepdim=True).clamp_min(_TINY)
+
+    def to_polar(self) -> tuple[torch.Tensor, torch.Tensor]:
+        r, v = self._unpack()
+        return r.detach(), v.detach()
+
+    def parameters(self) -> list[torch.Tensor]:
+        return [self._x]
+
+    # Distances come from the curvature -1 formulas rather than from
+    # self._manifold.dist, which is the geodesic distance of g_c and so differs
+    # from the embedding's whenever chart_curvature != 1.
+    def dist(self) -> torch.Tensor:
+        r, v = self._unpack()
+        return zero_diagonal(polar_distances_torch(r, v))
+
+    def dist_between(self, i_idx: torch.Tensor, j_idx: torch.Tensor) -> torch.Tensor:
+        r, v = self._unpack()
+        return polar_distances_between_torch(
+            r[i_idx], v[i_idx], r[j_idx], v[j_idx])
+
+
+__all__ = ["PolarRepresentation", "ExactPolarRepresentation",
+           "CurvedPolarRepresentation"]
