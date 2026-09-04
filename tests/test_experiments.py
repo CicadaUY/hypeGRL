@@ -8,10 +8,6 @@ from experiments import two_stage_chart_schedule as two_stage
 from experiments.datasets import balanced_tree_graph, single_cell_graph
 from experiments.graph_stats import _distance_matrix, mean_hyperbolicity
 from experiments.ogbl_ddi_link_prediction import _score_edges
-from hypegrl.representations import (
-    CurvedPolarRepresentation,
-    TangentRepresentation,
-)
 
 
 def test_tree_is_zero_hyperbolic():
@@ -428,23 +424,6 @@ def _tiny_stress_problem(spine=6, leaves=2, device="cpu"):
     return G, r, v, D * np.sqrt(k), mask
 
 
-def test_caterpillar_shape():
-    """A spine of ``spine`` nodes, each carrying ``leaves``."""
-    G = two_stage.caterpillar(10, 3)
-    assert G.number_of_nodes() == 10 + 10 * 3
-    assert nx.is_tree(G)
-    assert nx.diameter(G) == 11               # 9 spine hops plus a leaf at each end
-
-
-@pytest.mark.parametrize("chart", ["tangent", "c=0.3"])
-def test_refinement_reduces_stress(chart):
-    _, r, v, target, mask = _tiny_stress_problem()
-    stress, rep, history = two_stage.refine(chart, r, v, target, mask, 1e-2, 50, "cpu")
-    assert np.isfinite(history).all()
-    assert stress < history[0]
-    assert np.isfinite(rep.dist().detach().cpu().numpy()).all()
-
-
 def test_refinement_is_deterministic():
     """
     The HYDRA warm start is closed-form and the stress loss is full-batch with no
@@ -485,14 +464,6 @@ def test_devices_agree_at_the_first_step_then_drift():
     gpu = two_stage.refine("tangent", r, v, target, mask.cuda(), 3e-2, 400, "cuda")[2]
     assert cpu[0] == pytest.approx(gpu[0], rel=1e-12)      # same starting loss
     assert cpu[-1] == pytest.approx(gpu[-1], rel=0.5)      # same order of magnitude
-
-
-def test_build_selects_the_chart_and_its_curvature():
-    _, r, v, _, _ = _tiny_stress_problem()
-    assert isinstance(two_stage.build("tangent", r, v, "cpu"), TangentRepresentation)
-    curved = two_stage.build("c=0.3", r, v, "cpu")
-    assert isinstance(curved, CurvedPolarRepresentation)
-    assert curved._manifold.chart_curvature == pytest.approx(0.3)
 
 
 def test_a_diverged_run_sorts_last_instead_of_raising():

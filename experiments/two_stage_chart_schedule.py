@@ -175,8 +175,13 @@ def edge_average_precision(rep, A) -> float:
     return float(average_precision_score(A[iu], -d[iu]))
 
 
-def sweep(chart, r, v, target, mask, A, rates, n_steps, curves, device):
-    """Run one chart at every rate; return the row for its best."""
+def sweep(chart, r, v, target, mask, A, rates, n_steps, curves, device, checkpoint):
+    """Run one chart at every rate; return the row for its best.
+
+    ``checkpoint`` is called after each rate. A full sweep is hours long, so the
+    alternative — writing once at the end — loses everything to an interruption and
+    leaves nothing to look at while it runs.
+    """
     best = None
     for lr in rates:
         t0 = time.perf_counter()
@@ -189,6 +194,7 @@ def sweep(chart, r, v, target, mask, A, rates, n_steps, curves, device):
               f"   ({time.perf_counter() - t0:.0f}s)", flush=True)
         if best is None or stress < best["stress"]:
             best = row
+        checkpoint(dict(best, on_grid_edge=best["lr"] in (rates[0], rates[-1])))
     best["on_grid_edge"] = best["lr"] in (rates[0], rates[-1])
     return best
 
@@ -207,6 +213,10 @@ def main():
     ap.add_argument("--device", default=DEFAULT_DEVICE,
                     help="results are comparable only within one device; see the "
                          "module docstring")
+    ap.add_argument("--tag", default="",
+                    help="appended to the output name. Two runs of the same graph "
+                         "and device write the same files, so a second one needs "
+                         "this or it overwrites the first.")
     args = ap.parse_args()
     device = args.device
 
@@ -226,10 +236,29 @@ def main():
     print(f"warm start: r in [{r0.min():.2f}, {r0.max():.2f}]  "
           f"span {r0.max() - r0.min():.2f}", flush=True)
 
-    curves = {}
+    RESULTS.mkdir(exist_ok=True)
+    # The device is part of the filename because it is part of the result: the same
+    # sweep on CPU and on CUDA gives different stresses (see the module docstring), so
+    # one stem for both would silently overwrite one run's numbers with the other's.
+    tag = Path(args.graph).stem.replace("(", "").replace(")", "").replace(",", "-")
+    stem = RESULTS / (f"two_stage_chart_schedule_{tag}_{device}"
+                      + (f"_{args.tag}" if args.tag else ""))
+
+    curves, rows = {}, []
+
+    def save():
+        """Persist what has been run so far; called after every rate."""
+        json.dump(dict(graph=args.graph, n_nodes=n, curvature=k, rates=rates,
+                       device=device, n_coarse=args.n_coarse,
+                       lr_coarse=args.lr_coarse, coarse_stress=coarse_stress,
+                       n_fine=args.n_fine, best=rows),
+                  open(stem.with_suffix(".json"), "w"), indent=1)
+        np.savez(stem.with_suffix(".npz"), **curves)
+
     coarse_stress, coarse_rep, coarse_history = refine(
         "tangent", r0, v0, target, mask, args.lr_coarse, args.n_coarse, device)
     curves["coarse"] = coarse_history
+    save()
     r1, v1 = coarse_rep.to_polar()
     print(f"\ncoarse: tangent, lr={args.lr_coarse:g}, {args.n_coarse} steps  "
           f"{coarse_history[0]:.0f} -> {coarse_stress:.0f}   "
@@ -237,20 +266,13 @@ def main():
 
     print(f"\nfine: {args.n_fine} steps from that state, every chart over the same "
           f"{len(rates)} rates", flush=True)
-    rows = [sweep(c, r1, v1, target, mask, A, rates, args.n_fine, curves, device)
-            for c in charts]
-
-    RESULTS.mkdir(exist_ok=True)
-    # The device is part of the filename because it is part of the result: the same
-    # sweep on CPU and on CUDA gives different stresses (see the module docstring), so
-    # one stem for both would silently overwrite one run's numbers with the other's.
-    tag = Path(args.graph).stem.replace("(", "").replace(")", "").replace(",", "-")
-    stem = RESULTS / f"two_stage_chart_schedule_{tag}_{device}"
-    json.dump(dict(graph=args.graph, n_nodes=n, curvature=k, rates=rates,
-                   device=device, n_coarse=args.n_coarse, lr_coarse=args.lr_coarse,
-                   coarse_stress=coarse_stress, n_fine=args.n_fine, best=rows),
-              open(stem.with_suffix(".json"), "w"), indent=1)
-    np.savez(stem.with_suffix(".npz"), **curves)
+    for chart in charts:
+        def checkpoint(best_so_far, chart=chart):
+            rows[:] = [r for r in rows if r["chart"] != chart] + [best_so_far]
+            save()
+        best = sweep(chart, r1, v1, target, mask, A, rates, args.n_fine, curves,
+                     device, checkpoint)
+        checkpoint(best)
 
     control = next(r for r in rows if r["chart"] == "tangent")
     print(f"\n{'chart':>9}{'best lr':>10}{'stress':>12}{'AP':>8}"
