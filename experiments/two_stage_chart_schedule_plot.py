@@ -13,9 +13,13 @@ before finding one (a minimum at an end of the line is not a minimum).
 
 Reads whatever the run has written; usable while a sweep is still going.
 
+The arguments name the run exactly as the runner does, so a run given a ``--tag`` is
+read back with the same ``--tag``.
+
 Usage:
     python two_stage_chart_schedule_plot.py caterpillar40-4 cuda
     python two_stage_chart_schedule_plot.py fabaceae_sub cuda
+    python two_stage_chart_schedule_plot.py fabaceae_sub cuda --tag cbracket
 """
 from __future__ import annotations
 
@@ -56,13 +60,17 @@ def smooth(y, window=201):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("tag", help="graph tag as it appears in the filename")
+    ap.add_argument("graph", help="graph name as it appears in the filename")
     ap.add_argument("device", nargs="?", default="cuda")
+    ap.add_argument("--tag", default="", help="the run's --tag, if it was given one")
     args = ap.parse_args()
 
-    stem = RESULTS / f"two_stage_chart_schedule_{args.tag}_{args.device}"
-    curves = dict(np.load(stem.with_suffix(".npz")))
-    meta = json.load(open(stem.with_suffix(".json")))
+    stem = RESULTS / (f"two_stage_chart_schedule_{args.graph}_{args.device}"
+                      + (f"_{args.tag}" if args.tag else ""))
+    # Appended, not with_suffix: a tag carrying a dot would otherwise read as a suffix
+    # and be replaced, so the plot would silently open a different run's files.
+    curves = dict(np.load(f"{stem}.npz"))
+    meta = json.load(open(f"{stem}.json"))
     coarse = np.asarray(curves.pop("coarse"), float)
 
     runs = {}                                   # chart -> {lr: history}
@@ -114,7 +122,7 @@ def main():
                  f"coarse {meta['n_coarse']} + fine {meta['n_fine']} steps",
                  fontsize=13)
     fig.tight_layout()
-    out = stem.with_suffix(".png")
+    out = f"{stem}.png"
     fig.savefig(out, dpi=130, facecolor="white")
     print(f"wrote {out}")
 

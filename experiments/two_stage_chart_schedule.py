@@ -18,13 +18,23 @@ from the same handover state with the same restart. It differs from the curved a
 the chart alone, and both get the same step budget, so nothing wins on freshness or on
 spend.
 
-WHY EVERY ARM RE-SEARCHES THE RATE, OVER ONE SHARED GRID. The angular coordinate moves
-by about lr/w_c(r) per step, and the warps differ by orders of magnitude at the radii a
-deep graph reaches, so a rate carried across the handover is not the same step. Each arm
-therefore gets its own rate. The grid must span the UNION of the arms' usable ranges,
-not each arm's expected range: the winning curved rate here (0.005) and the winning
-tangent rate (0.0001) are a factor of 50 apart, and a grid centred on either one alone
-reports the other as far worse than it is.
+WHY EVERY ARM RE-SEARCHES THE RATE. The angular coordinate moves by about lr/w_c(r) per
+step, and the warps differ by orders of magnitude at the radii a deep graph reaches, so
+a rate carried across the handover is not the same step. Each arm therefore gets its own
+rate, and the requirement is that every arm's grid CONTAINS ITS OWN OPTIMUM: the winning
+curved rate here (0.005) and the winning tangent rate (0.0001) are a factor of 50 apart,
+so a grid centred on one alone reports the other as far worse than it is. One shared
+grid spanning the union satisfies that, and is what --rates defaults to. It stops being
+affordable once the charts are far apart -- lr scales with w_c(r), which past c = 0.3
+puts the union over three decades wide -- and the alternative is then one invocation per
+chart, each with its own grid centred on its predicted rate. Either way the check is the
+same, and it is reported per row: an optimum at an end of a grid is not an optimum.
+
+WHY THE COARSE PHASE ALSO NEEDS SWEEPING. It is a single arm, so it is easy to forget
+that its rate and length are choices too -- and it is the shared prefix of every fine
+arm, so a bad handover is inherited by all of them at once. Its own loss curve cannot
+tell a converged handover from one stalled at that rate. Run it alone (--n-fine 0) over
+a few rates before spending anything on the fine sweep.
 
 REPRODUCIBILITY, AND THE LIMIT OF IT. The pipeline carries no randomness: the HYDRA warm
 start is a closed-form eigendecomposition (a seed changes nothing -- verified) and the
@@ -40,7 +50,8 @@ Usage:
     python two_stage_chart_schedule.py                     # caterpillar(40,4)
     python two_stage_chart_schedule.py --graph "caterpillar(20,9)"
     python two_stage_chart_schedule.py --graph fabaceae_sub --n-fine 50000
-    python two_stage_chart_schedule.py --curvatures 0.1,0.3,0.5
+    python two_stage_chart_schedule.py --charts tangent,c=0.1,c=0.3
+    python two_stage_chart_schedule.py --n-fine 0 --lr-coarse 0.1   # handover only
     python two_stage_chart_schedule.py --device cpu        # comparable to CPU runs
 """
 from __future__ import annotations
@@ -69,7 +80,7 @@ DEFAULT_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # Spans both arms' usable ranges; see the module docstring on why one shared grid.
 RATES = [1e-5, 3e-5, 1e-4, 3e-4, 1e-3, 3e-3, 5e-3, 1e-2, 2e-2, 5e-2, 0.1, 0.3]
 N_COARSE, LR_COARSE, N_FINE = 6000, 0.03, 24000
-CURVATURES = [0.3]
+CHARTS = ["tangent", "c=0.3"]
 
 
 def caterpillar(spine: int, leaves: int) -> nx.Graph:
@@ -175,12 +186,22 @@ def edge_average_precision(rep, A) -> float:
     return float(average_precision_score(A[iu], -d[iu]))
 
 
-def sweep(chart, r, v, target, mask, A, rates, n_steps, curves, device, checkpoint):
+def as_polar_array(r, v):
+    """``(r, v)`` packed as one ``(N, 1+D)`` array — the form the npz stores."""
+    return np.concatenate([r.cpu().numpy().reshape(-1, 1), v.cpu().numpy()], axis=-1)
+
+
+def sweep(chart, r, v, target, mask, A, rates, n_steps, curves, coords, device,
+          checkpoint):
     """Run one chart at every rate; return the row for its best.
 
     ``checkpoint`` is called after each rate. A full sweep is hours long, so the
     alternative — writing once at the end — loses everything to an interruption and
     leaves nothing to look at while it runs.
+
+    ``coords`` collects the best arm's final position. A loss history cannot be turned
+    back into an embedding, so without it a measure not thought of during the run costs
+    the whole sweep again to compute.
     """
     best = None
     for lr in rates:
@@ -194,6 +215,7 @@ def sweep(chart, r, v, target, mask, A, rates, n_steps, curves, device, checkpoi
               f"   ({time.perf_counter() - t0:.0f}s)", flush=True)
         if best is None or stress < best["stress"]:
             best = row
+            coords[chart] = as_polar_array(*rep.to_polar())
         checkpoint(dict(best, on_grid_edge=best["lr"] in (rates[0], rates[-1])))
     best["on_grid_edge"] = best["lr"] in (rates[0], rates[-1])
     return best
@@ -204,12 +226,16 @@ def main():
     ap.add_argument("--graph", default="caterpillar(40,4)")
     ap.add_argument("--curvature", type=float, default=1.0,
                     help="curvature of the embedding space, for HYDRA's target scaling")
-    ap.add_argument("--curvatures", default=",".join(str(c) for c in CURVATURES),
-                    help="chart curvatures for the fine phase (comma-separated)")
+    ap.add_argument("--charts", default=",".join(CHARTS),
+                    help="fine-phase charts, comma-separated: 'tangent' and/or "
+                         "'c=<chart curvature>'. The default carries the tangent "
+                         "control; a run without it measures no gap of its own and is "
+                         "only readable next to a run that has one.")
     ap.add_argument("--rates", default=",".join(str(x) for x in RATES))
     ap.add_argument("--n-coarse", type=int, default=N_COARSE)
     ap.add_argument("--lr-coarse", type=float, default=LR_COARSE)
-    ap.add_argument("--n-fine", type=int, default=N_FINE)
+    ap.add_argument("--n-fine", type=int, default=N_FINE,
+                    help="0 runs the coarse phase alone, for sweeping the handover")
     ap.add_argument("--device", default=DEFAULT_DEVICE,
                     help="results are comparable only within one device; see the "
                          "module docstring")
@@ -221,7 +247,7 @@ def main():
     device = args.device
 
     rates = [float(x) for x in args.rates.split(",")]
-    charts = ["tangent"] + [f"c={c}" for c in args.curvatures.split(",")]
+    charts = args.charts.split(",")
 
     G = load_graph(args.graph)
     n = G.number_of_nodes()
@@ -243,8 +269,13 @@ def main():
     tag = Path(args.graph).stem.replace("(", "").replace(")", "").replace(",", "-")
     stem = RESULTS / (f"two_stage_chart_schedule_{tag}_{device}"
                       + (f"_{args.tag}" if args.tag else ""))
+    # The extensions are appended, never set with with_suffix: a --tag carrying a dot
+    # ("c0.05", "lr0.003") reads as a suffix and would be replaced rather than kept,
+    # so a set of runs distinguished only by that number would all write one file.
+    json_path, npz_path = f"{stem}.json", f"{stem}.npz"
+    coords_path = f"{stem}_coords.npz"
 
-    curves, rows = {}, []
+    curves, coords, rows = {}, {}, []
 
     def save():
         """Persist what has been run so far; called after every rate."""
@@ -252,17 +283,26 @@ def main():
                        device=device, n_coarse=args.n_coarse,
                        lr_coarse=args.lr_coarse, coarse_stress=coarse_stress,
                        n_fine=args.n_fine, best=rows),
-                  open(stem.with_suffix(".json"), "w"), indent=1)
-        np.savez(stem.with_suffix(".npz"), **curves)
+                  open(json_path, "w"), indent=1)
+        np.savez(npz_path, **curves)
+        # Node labels travel with the coordinates: the rows are in the embedder's
+        # order, and a file that does not say which order that was is a silent
+        # mismatch waiting for the first reordering warm start.
+        np.savez(coords_path, nodes=np.asarray(nodes), **coords)
 
     coarse_stress, coarse_rep, coarse_history = refine(
         "tangent", r0, v0, target, mask, args.lr_coarse, args.n_coarse, device)
     curves["coarse"] = coarse_history
-    save()
     r1, v1 = coarse_rep.to_polar()
+    coords["coarse"] = as_polar_array(r1, v1)
+    save()
     print(f"\ncoarse: tangent, lr={args.lr_coarse:g}, {args.n_coarse} steps  "
           f"{coarse_history[0]:.0f} -> {coarse_stress:.0f}   "
           f"r in [{float(r1.min()):.2f}, {float(r1.max()):.2f}]", flush=True)
+
+    if args.n_fine == 0:
+        print(f"\nwrote {json_path}  (coarse only)")
+        return
 
     print(f"\nfine: {args.n_fine} steps from that state, every chart over the same "
           f"{len(rates)} rates", flush=True)
@@ -271,18 +311,21 @@ def main():
             rows[:] = [r for r in rows if r["chart"] != chart] + [best_so_far]
             save()
         best = sweep(chart, r1, v1, target, mask, A, rates, args.n_fine, curves,
-                     device, checkpoint)
+                     coords, device, checkpoint)
         checkpoint(best)
 
-    control = next(r for r in rows if r["chart"] == "tangent")
+    # The control when it ran; a chart-only invocation has no gap of its own to
+    # report, so it is scaled by its own best arm and the header says so.
+    control = next((r for r in rows if r["chart"] == "tangent"),
+                   min(rows, key=lambda r: r["stress"]))
     print(f"\n{'chart':>9}{'best lr':>10}{'stress':>12}{'AP':>8}"
-          f"{'vs control':>12}")
+          f"{'vs ' + control['chart']:>12}")
     for row in sorted(rows, key=lambda r: r["stress"]):
         rel = row["stress"] / control["stress"]
         print(f"{row['chart']:>9}{row['lr']:>10g}{row['stress']:>12.1f}"
               f"{row['average_precision']:>8.4f}{rel:>11.2f}x"
               f"{'   [grid edge]' if row['on_grid_edge'] else ''}")
-    print(f"\nwrote {stem}.json")
+    print(f"\nwrote {json_path}")
 
 
 if __name__ == "__main__":
