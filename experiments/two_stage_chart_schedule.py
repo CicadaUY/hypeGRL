@@ -1,5 +1,4 @@
-"""Two-stage chart schedule: a coarse phase in the tangent chart, a fine one in a
-curved polar chart.
+"""Two-stage chart schedule: a coarse phase in one chart, a fine one in another.
 
 THE CLAIM UNDER TEST. A chart does not change where the minima are — every chart here
 computes the same curvature -1 distance — but it does decide how far a step moves a
@@ -231,6 +230,12 @@ def main():
                          "'c=<chart curvature>'. The default carries the tangent "
                          "control; a run without it measures no gap of its own and is "
                          "only readable next to a run that has one.")
+    ap.add_argument("--coarse-chart", default="tangent",
+                    help="chart for the coarse phase: 'tangent' or 'c=<chart "
+                         "curvature>'. Setting it to a small c runs the whole schedule "
+                         "inside the warp family, so no comparison spans two chart "
+                         "parametrisations. Its rate optimum is not the tangent "
+                         "one and has to be swept again.")
     ap.add_argument("--rates", default=",".join(str(x) for x in RATES))
     ap.add_argument("--n-coarse", type=int, default=N_COARSE)
     ap.add_argument("--lr-coarse", type=float, default=LR_COARSE)
@@ -266,8 +271,13 @@ def main():
     # The device is part of the filename because it is part of the result: the same
     # sweep on CPU and on CUDA gives different stresses (see the module docstring), so
     # one stem for both would silently overwrite one run's numbers with the other's.
+    # The coarse chart is part of the result for the same reason: two runs of the same
+    # fine charts differing only in what produced their handover are different
+    # experiments, and the tag alone protecting them is a hand-maintained convention.
+    # Only a non-default coarse chart is named, so existing filenames are unchanged.
     tag = Path(args.graph).stem.replace("(", "").replace(")", "").replace(",", "-")
-    stem = RESULTS / (f"two_stage_chart_schedule_{tag}_{device}"
+    coarse_tag = "" if args.coarse_chart == "tangent" else f"_{args.coarse_chart}"
+    stem = RESULTS / (f"two_stage_chart_schedule_{tag}_{device}{coarse_tag}"
                       + (f"_{args.tag}" if args.tag else ""))
     # The extensions are appended, never set with with_suffix: a --tag carrying a dot
     # ("c0.05", "lr0.003") reads as a suffix and would be replaced rather than kept,
@@ -281,7 +291,8 @@ def main():
         """Persist what has been run so far; called after every rate."""
         json.dump(dict(graph=args.graph, n_nodes=n, curvature=k, rates=rates,
                        device=device, n_coarse=args.n_coarse,
-                       lr_coarse=args.lr_coarse, coarse_stress=coarse_stress,
+                       lr_coarse=args.lr_coarse, coarse_chart=args.coarse_chart,
+                       coarse_stress=coarse_stress,
                        n_fine=args.n_fine, best=rows),
                   open(json_path, "w"), indent=1)
         np.savez(npz_path, **curves)
@@ -291,12 +302,13 @@ def main():
         np.savez(coords_path, nodes=np.asarray(nodes), **coords)
 
     coarse_stress, coarse_rep, coarse_history = refine(
-        "tangent", r0, v0, target, mask, args.lr_coarse, args.n_coarse, device)
+        args.coarse_chart, r0, v0, target, mask, args.lr_coarse, args.n_coarse, device)
     curves["coarse"] = coarse_history
     r1, v1 = coarse_rep.to_polar()
     coords["coarse"] = as_polar_array(r1, v1)
     save()
-    print(f"\ncoarse: tangent, lr={args.lr_coarse:g}, {args.n_coarse} steps  "
+    print(f"\ncoarse: {args.coarse_chart}, lr={args.lr_coarse:g}, "
+          f"{args.n_coarse} steps  "
           f"{coarse_history[0]:.0f} -> {coarse_stress:.0f}   "
           f"r in [{float(r1.min()):.2f}, {float(r1.max()):.2f}]", flush=True)
 
