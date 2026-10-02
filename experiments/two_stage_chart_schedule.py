@@ -190,6 +190,41 @@ def as_polar_array(r, v):
     return np.concatenate([r.cpu().numpy().reshape(-1, 1), v.cpu().numpy()], axis=-1)
 
 
+def load_handover(path, nodes, graph, n):
+    """The handover ``(r, v)`` from a previous run's saved coarse state.
+
+    Equivalent to recomputing the coarse phase rather than a shortcut around it:
+    the fine phase builds a new representation on a new manifold and a fresh
+    optimiser whatever happens, so ``(r, v)`` is the whole of what crosses the
+    handover, and it is stored in float64. This is why the rule against resuming
+    from saved coordinates -- which holds for EXTENDING a fine arm, where the
+    reload would drop Adam's moments and inject a second restart -- does not
+    reach this case: at the handover those moments are discarded by design, and
+    the flat-chart control exists to price that restart in.
+
+    Returns the coordinates plus the source run's own record of the coarse
+    phase, so the descendant reports the settings that actually produced its
+    handover instead of whatever was passed on its command line.
+    """
+    z = np.load(path)
+    src = json.load(open(str(path).replace("_coords.npz", ".json")))
+    # The node array alone does NOT identify the graph: every loader relabels to
+    # 0..N-1, so two different graphs of equal size have identical labels -- a
+    # caterpillar(20,9) handover was accepted for a caterpillar(40,4) run before
+    # the source's own name was checked. Geometry is only comparable within one
+    # graph, so the name is the identity that has to match.
+    if (src["graph"], src["n_nodes"]) != (graph, n):
+        raise ValueError(
+            f"{path} holds a handover for {src['graph']} (N={src['n_nodes']}), "
+            f"not {graph} (N={n})")
+    if not np.array_equal(z["nodes"], np.asarray(nodes)):
+        raise ValueError(
+            f"{path} was written for a different node order; its coordinates "
+            f"would be paired with the wrong nodes")
+    arr = z["coarse"]
+    return torch.as_tensor(arr[:, 0]), torch.as_tensor(arr[:, 1:]), src
+
+
 def sweep(chart, r, v, target, mask, A, rates, n_steps, curves, coords, device,
           checkpoint):
     """Run one chart at every rate; return the row for its best.
@@ -239,6 +274,14 @@ def main():
     ap.add_argument("--rates", default=",".join(str(x) for x in RATES))
     ap.add_argument("--n-coarse", type=int, default=N_COARSE)
     ap.add_argument("--lr-coarse", type=float, default=LR_COARSE)
+    ap.add_argument("--coarse-from", default=None,
+                    help="path to a previous run's *_coords.npz: branch "
+                         "from its saved handover instead of recomputing an "
+                         "identical coarse phase. --n-coarse/--lr-coarse/"
+                         "--coarse-chart are then read from that run rather "
+                         "than from this command line. Only the handover is "
+                         "reusable this way; a fine arm is still extended by "
+                         "re-running it with a larger --n-fine.")
     ap.add_argument("--n-fine", type=int, default=N_FINE,
                     help="0 runs the coarse phase alone, for sweeping the handover")
     ap.add_argument("--device", default=DEFAULT_DEVICE,
@@ -262,6 +305,17 @@ def main():
     A = nx.to_numpy_array(G, nodelist=nodes, weight=None)
     target = D * np.sqrt(k)
 
+    # The coarse settings have to resolve before the output stem, which encodes
+    # the coarse chart: a run branching from a saved handover reports the chart
+    # that produced it, not the default this command line never used.
+    if args.coarse_from:
+        r1, v1, src = load_handover(args.coarse_from, nodes, args.graph, n)
+        n_coarse, lr_coarse = src["n_coarse"], src["lr_coarse"]
+        coarse_chart, coarse_stress = src["coarse_chart"], src["coarse_stress"]
+    else:
+        n_coarse, lr_coarse = args.n_coarse, args.lr_coarse
+        coarse_chart, coarse_stress = args.coarse_chart, None
+
     print(f"=== {args.graph}  N={n}  diameter={nx.diameter(G)}  k={k:g}  "
           f"device={device} ===")
     print(f"warm start: r in [{r0.min():.2f}, {r0.max():.2f}]  "
@@ -276,7 +330,7 @@ def main():
     # experiments, and the tag alone protecting them is a hand-maintained convention.
     # Only a non-default coarse chart is named, so existing filenames are unchanged.
     tag = Path(args.graph).stem.replace("(", "").replace(")", "").replace(",", "-")
-    coarse_tag = "" if args.coarse_chart == "tangent" else f"_{args.coarse_chart}"
+    coarse_tag = "" if coarse_chart == "tangent" else f"_{coarse_chart}"
     stem = RESULTS / (f"two_stage_chart_schedule_{tag}_{device}{coarse_tag}"
                       + (f"_{args.tag}" if args.tag else ""))
     # The extensions are appended, never set with with_suffix: a --tag carrying a dot
@@ -290,8 +344,9 @@ def main():
     def save():
         """Persist what has been run so far; called after every rate."""
         json.dump(dict(graph=args.graph, n_nodes=n, curvature=k, rates=rates,
-                       device=device, n_coarse=args.n_coarse,
-                       lr_coarse=args.lr_coarse, coarse_chart=args.coarse_chart,
+                       device=device, n_coarse=n_coarse,
+                       lr_coarse=lr_coarse, coarse_chart=coarse_chart,
+                       coarse_from=args.coarse_from,
                        coarse_stress=coarse_stress,
                        n_fine=args.n_fine, best=rows),
                   open(json_path, "w"), indent=1)
@@ -301,16 +356,21 @@ def main():
         # mismatch waiting for the first reordering warm start.
         np.savez(coords_path, nodes=np.asarray(nodes), **coords)
 
-    coarse_stress, coarse_rep, coarse_history = refine(
-        args.coarse_chart, r0, v0, target, mask, args.lr_coarse, args.n_coarse, device)
-    curves["coarse"] = coarse_history
-    r1, v1 = coarse_rep.to_polar()
+    if args.coarse_from:
+        print(f"\ncoarse: {coarse_chart}, lr={lr_coarse:g}, {n_coarse} steps, "
+              f"reused from {args.coarse_from}", flush=True)
+    else:
+        coarse_stress, coarse_rep, coarse_history = refine(
+            coarse_chart, r0, v0, target, mask, lr_coarse, n_coarse, device)
+        curves["coarse"] = coarse_history
+        r1, v1 = coarse_rep.to_polar()
+        print(f"\ncoarse: {coarse_chart}, lr={lr_coarse:g}, {n_coarse} steps  "
+              f"{coarse_history[0]:.0f} -> {coarse_stress:.0f}", flush=True)
+    # Written either way, so a run that branched is still self-contained.
     coords["coarse"] = as_polar_array(r1, v1)
     save()
-    print(f"\ncoarse: {args.coarse_chart}, lr={args.lr_coarse:g}, "
-          f"{args.n_coarse} steps  "
-          f"{coarse_history[0]:.0f} -> {coarse_stress:.0f}   "
-          f"r in [{float(r1.min()):.2f}, {float(r1.max()):.2f}]", flush=True)
+    print(f"handover: r in [{float(r1.min()):.2f}, {float(r1.max()):.2f}]",
+          flush=True)
 
     if args.n_fine == 0:
         print(f"\nwrote {json_path}  (coarse only)")

@@ -53,6 +53,25 @@ pip install -e ".[dev]"
 
 This way, instead of copying files to your site-packages, pip creates a link to your local folder. Any code you change in that folder is instantly used by Python.
 
+### Troubleshooting: `pip` errors on `-e ".[dev]"` ("missing the 'build_editable' hook")
+
+If `pip install -e ".[dev]"` fails with an error like:
+
+```
+ERROR: Project ... has a 'pyproject.toml' and its build backend is missing the
+'build_editable' hook. Since it does not have a 'setup.py' nor a 'setup.cfg',
+it cannot be installed in editable mode.
+```
+
+your system's `pip` is too old to correctly detect PEP 660 editable-install
+support in a modern `setuptools` (this is common on Ubuntu 22.04, whose
+system `pip` is `22.0.2`). Upgrade `pip` and retry:
+
+```bash
+pip install --upgrade pip
+pip install -e ".[dev]"
+```
+
 ## Quick start
 
 ```python
