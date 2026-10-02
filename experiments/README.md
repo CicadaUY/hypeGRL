@@ -28,11 +28,13 @@ pip install -r experiments/requirements.txt   # experiment-only extras
 |---|---|---|
 | `datasets.py` | yes | Shared dataset loaders (single-cell k-NN graphs, airport networks, OpenFlights) |
 | `graph_stats.py` | yes | Shared per-graph descriptors (e.g. Gromov `delta_mean`) |
+| `build_phylogenies.py` | yes | Rebuilds `data/phylogeny/` from the Open Tree of Life, byte-identically |
 | `hypegrl_paper/` | yes | The library paper: Table I link prediction (`run_table_i()`), the hierarchy ladder, ogbl-ddi, the geometry diagnostics, and their figures |
-| `icassp2027/` | yes | The ICASSP 2027 paper: the two-stage curvature schedule under the stress loss (`two_stage_chart_schedule.py --graph`) |
+| `icassp2027/` | yes | The ICASSP 2027 paper: every run, the table and the figures (see its README) |
 | `exploratory/` | yes | Studies and sanity checks that informed the papers or the library's design notes but produce no number in either; may lag the library |
 | `data/single_cell/` | yes | Small vendored CSVs (see that folder's README) |
 | `data/phylogeny/` | yes | Small vendored Open Tree of Life clade trees (see that folder's README) |
+| `data/hubs/` | yes | Two small vendored hub-dominated graphs (see that folder's README) |
 | `data/` (other) | no | Download-on-demand caches (OpenFlights, torch_geometric Airports) — gitignored |
 | `results/` | no | All run outputs, shared by every folder — gitignored, see below |
 

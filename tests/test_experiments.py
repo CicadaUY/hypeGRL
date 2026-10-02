@@ -4,10 +4,11 @@ import numpy as np
 import pytest
 import torch
 
-from experiments.icassp2027 import two_stage_chart_schedule as two_stage
+from experiments import build_phylogenies
 from experiments.datasets import balanced_tree_graph, single_cell_graph
 from experiments.graph_stats import _distance_matrix, mean_hyperbolicity
 from experiments.hypegrl_paper.ogbl_ddi_link_prediction import _score_edges
+from experiments.icassp2027 import two_stage_chart_schedule as two_stage
 
 
 def test_tree_is_zero_hyperbolic():
@@ -217,7 +218,9 @@ def test_rdpg_candidate_scores_handles_non_contiguous_node_labels():
     ladder does. Indexing the adjacency by ``range(N)`` there either raises or
     silently scores the wrong pairs.
     """
-    from experiments.hypegrl_paper.link_prediction_experiment import rdpg_candidate_scores
+    from experiments.hypegrl_paper.link_prediction_experiment import (
+        rdpg_candidate_scores,
+    )
     from hypegrl.evaluation import link_prediction_split, training_graph
 
     G = nx.karate_club_graph()
@@ -243,7 +246,9 @@ def test_rdpg_candidate_scores_handles_non_contiguous_node_labels():
 
 
 def test_largest_component_split_drops_only_out_of_component_pairs():
-    from experiments.hypegrl_paper.link_prediction_experiment import largest_component_split
+    from experiments.hypegrl_paper.link_prediction_experiment import (
+        largest_component_split,
+    )
     from hypegrl.evaluation import LinkPredictionSplit
 
     # Two triangles joined by a bridge; the bridge is the held-out edge, so
@@ -269,7 +274,9 @@ def test_largest_component_split_drops_only_out_of_component_pairs():
 
 def test_ladder_driver_runs_on_an_injected_toy_loader():
     """The `loaders` injection point drives the whole pipeline with no download."""
-    from experiments.hypegrl_paper.link_prediction_experiment import run_hierarchy_ladder
+    from experiments.hypegrl_paper.link_prediction_experiment import (
+        run_hierarchy_ladder,
+    )
 
     rows = run_hierarchy_ladder(
         datasets=["toy"],
@@ -327,7 +334,9 @@ def test_ladder_prepares_splits_once_per_dataset_so_arms_are_paired():
 
 
 def test_hyperbolic_advantage_pairs_by_dataset_and_dim():
-    from experiments.hypegrl_paper.link_prediction_experiment import hyperbolic_advantage
+    from experiments.hypegrl_paper.link_prediction_experiment import (
+        hyperbolic_advantage,
+    )
 
     # Per-seed AUCs differ by a constant +0.10, so the *paired* std is exactly 0
     # even though each arm has a large spread of its own. Computing the
@@ -471,3 +480,36 @@ def test_a_diverged_run_sorts_last_instead_of_raising():
     _, r, v, target, mask = _tiny_stress_problem()
     stress, _, _ = two_stage.refine("c=0.3", r, v, target, mask, 1e9, 50, "cpu")
     assert stress == float("inf") or np.isfinite(stress)
+
+
+def test_phylogeny_labels_depend_only_on_the_newick():
+    """Labels are the sorted order of the newick names, unnamed nodes keyed by
+    depth-first position, so a rebuild reproduces every row order downstream.
+
+    ``((A,B)X,(C,D));`` walks as root ``_i0``, ``X``, ``A``, ``B``, ``_i4``,
+    ``C``, ``D``; sorted, that is A B C D X _i0 _i4 -> 0..6.
+    """
+    pytest.importorskip("Bio")
+    G = build_phylogenies.newick_to_graph("((A,B)X,(C,D));")
+    assert sorted(tuple(sorted(e)) for e in G.edges()) == [
+        (0, 4), (1, 4), (2, 6), (3, 6), (4, 5), (5, 6)]
+
+
+def test_three_sweep_eccentricity_iqr_matches_networkx():
+    """The subtree selection ranks on eccentricities taken from a diameter pair,
+    a shortcut valid only on trees; check it against the direct computation."""
+    for seed in range(5):
+        T = nx.random_labeled_tree(60, seed=seed)
+        ecc = np.array(list(nx.eccentricity(T).values()))
+        iqr, diameter = build_phylogenies._eccentricity_iqr(T)
+        assert iqr == pytest.approx(np.percentile(ecc, 75) - np.percentile(ecc, 25))
+        assert diameter == nx.diameter(T)
+
+
+def test_widest_subtree_respects_the_size_band():
+    T = nx.random_labeled_tree(300, seed=0)
+    sub = build_phylogenies.widest_subtree(T, 20, 80)
+    assert 20 <= sub.number_of_nodes() <= 80 and nx.is_tree(sub)
+    assert set(sub.nodes()) == set(range(sub.number_of_nodes()))
+    with pytest.raises(ValueError):
+        build_phylogenies.widest_subtree(T, 1000, 2000)

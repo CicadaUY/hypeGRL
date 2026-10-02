@@ -255,6 +255,24 @@ def sweep(chart, r, v, target, mask, A, rates, n_steps, curves, coords, device,
     return best
 
 
+def output_stem(graph: str, device: str, coarse_chart: str, tag: str = "") -> Path:
+    """Where a run writes: ``<stem>.json``, ``<stem>.npz`` and ``<stem>_coords.npz``.
+
+    The device is part of the name because it is part of the result: the same sweep
+    on CPU and on CUDA gives different stresses (see the module docstring), so one
+    stem for both would silently overwrite one run's numbers with the other's. The
+    coarse chart is part of the result for the same reason: two runs of the same fine
+    charts differing only in what produced their handover are different experiments.
+    Only a non-default coarse chart is named, so existing filenames are unchanged.
+    The extensions are appended, never set with ``with_suffix``: a tag carrying a dot
+    (``lr0.003``) reads as a suffix and would be replaced rather than kept.
+    """
+    name = Path(graph).stem.replace("(", "").replace(")", "").replace(",", "-")
+    coarse_tag = "" if coarse_chart == "tangent" else f"_{coarse_chart}"
+    return RESULTS / (f"two_stage_chart_schedule_{name}_{device}{coarse_tag}"
+                      + (f"_{tag}" if tag else ""))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--graph", default="caterpillar(40,4)")
@@ -322,20 +340,7 @@ def main():
           f"span {r0.max() - r0.min():.2f}", flush=True)
 
     RESULTS.mkdir(exist_ok=True)
-    # The device is part of the filename because it is part of the result: the same
-    # sweep on CPU and on CUDA gives different stresses (see the module docstring), so
-    # one stem for both would silently overwrite one run's numbers with the other's.
-    # The coarse chart is part of the result for the same reason: two runs of the same
-    # fine charts differing only in what produced their handover are different
-    # experiments, and the tag alone protecting them is a hand-maintained convention.
-    # Only a non-default coarse chart is named, so existing filenames are unchanged.
-    tag = Path(args.graph).stem.replace("(", "").replace(")", "").replace(",", "-")
-    coarse_tag = "" if coarse_chart == "tangent" else f"_{coarse_chart}"
-    stem = RESULTS / (f"two_stage_chart_schedule_{tag}_{device}{coarse_tag}"
-                      + (f"_{args.tag}" if args.tag else ""))
-    # The extensions are appended, never set with with_suffix: a --tag carrying a dot
-    # ("c0.05", "lr0.003") reads as a suffix and would be replaced rather than kept,
-    # so a set of runs distinguished only by that number would all write one file.
+    stem = output_stem(args.graph, device, coarse_chart, args.tag)
     json_path, npz_path = f"{stem}.json", f"{stem}.npz"
     coords_path = f"{stem}_coords.npz"
 

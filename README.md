@@ -138,6 +138,28 @@ beyond the tutorials — see [`experiments/README.md`](experiments/README.md).
 
 Full documentation at [hypegrl.readthedocs.io](https://hypegrl.readthedocs.io).
 
+## Reproducing the papers
+
+The experiments behind the papers built on hypeGRL live in
+[`experiments/`](experiments/), one folder per paper:
+
+| Folder | Paper |
+|---|---|
+| [`experiments/hypegrl_paper/`](experiments/hypegrl_paper/) | The hypeGRL library paper: link prediction, geometry diagnostics |
+| [`experiments/icassp2027/`](experiments/icassp2027/) | ICASSP 2027: the curvature of the optimization metric as a preconditioner for stress-based hyperbolic embedding |
+
+They are not part of the installed library and need a few extra packages:
+
+```bash
+pip install -e ".[dev]"
+pip install -r experiments/requirements.txt
+```
+
+Run every script as a module from the repository root, e.g.
+`python -m experiments.icassp2027.two_stage_chart_schedule --graph fabaceae_sub`.
+Outputs go to `experiments/results/`, which is not tracked. See
+[`experiments/README.md`](experiments/README.md) for the layout and the datasets.
+
 ## References
 
 - Klimovskaia et al., *Poincaré Maps for Analyzing Complex Hierarchies*, Nature Communications 2020.

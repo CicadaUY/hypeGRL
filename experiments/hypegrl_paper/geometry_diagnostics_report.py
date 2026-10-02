@@ -25,7 +25,10 @@ import networkx as nx
 REPO = str(Path(__file__).resolve().parents[2])
 sys.path.insert(0, REPO)
 
-from experiments.hypegrl_paper.geometry_diagnostics import diagnose, format_report  # noqa: E402
+from experiments.hypegrl_paper.geometry_diagnostics import (  # noqa: E402
+    diagnose,
+    format_report,
+)
 
 RESULTS = Path(REPO) / "experiments" / "results"
 

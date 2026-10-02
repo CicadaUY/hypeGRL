@@ -28,7 +28,8 @@ experiments/results/
 /data/
 
 # Downloaded datasets under experiments/data/ (OGB, Planetoid, ...); the
-# vendored single-cell CSVs are the exception and stay tracked.
+# vendored folders are the exception and stay tracked.
 experiments/data/*
 !experiments/data/single_cell/
 !experiments/data/phylogeny/
+!experiments/data/hubs/

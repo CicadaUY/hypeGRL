@@ -36,8 +36,10 @@ library API:
 
 Run:
     python experiments/hypegrl_paper/fermi_dirac_recovery_demo.py
-    python experiments/hypegrl_paper/fermi_dirac_recovery_demo.py --method dmercator --n 150
-    python experiments/hypegrl_paper/fermi_dirac_recovery_demo.py --sampling euclidean  # contrast
+    python experiments/hypegrl_paper/fermi_dirac_recovery_demo.py \
+        --method dmercator --n 150
+    python experiments/hypegrl_paper/fermi_dirac_recovery_demo.py \
+        --sampling euclidean  # contrast
 """
 from __future__ import annotations
 
