@@ -27,7 +27,7 @@ Output: ``results/openflights_dmercator_regions.png``.
 import sys
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[1]
+REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
 import matplotlib  # noqa: E402
@@ -36,7 +36,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
-RESULTS = Path(__file__).resolve().parent / "results"
+RESULTS = Path(__file__).resolve().parents[1] / "results"
 EMB = RESULTS / "embeddings"
 DMERC = EMB / "openflights_dmercator_native.npz"
 
@@ -97,7 +97,7 @@ def fit_native():
     ordering and not ``G.nodes()``.
     """
     from experiments.datasets import openflights_graph
-    from experiments.link_prediction_experiment import _unweighted
+    from experiments.hypegrl_paper.link_prediction_experiment import _unweighted
     from hypegrl.embedders.dmercator import DMercatorEmbedder
 
     G = openflights_graph()

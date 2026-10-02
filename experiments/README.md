@@ -1,7 +1,7 @@
 # experiments/
 
-Reproduction scripts for the hypeGRL paper — dataset loaders, baselines,
-per-graph descriptors, and the figure/table runners.
+Reproduction scripts for the papers built on hypeGRL — one folder per paper,
+plus the dataset loaders and per-graph descriptors they share.
 
 **This is not part of the installed library.** `pip install hypegrl` does not
 ship it, and it carries no API-stability contract. It sits next to the library
@@ -26,14 +26,20 @@ pip install -r experiments/requirements.txt   # experiment-only extras
 
 | Path | Tracked? | What it is |
 |---|---|---|
-| `datasets.py` | yes | Paper dataset loaders (single-cell k-NN graphs, airport networks, OpenFlights) |
-| `link_prediction_experiment.py` | yes | Table I link-prediction runner (`run_table_i()`) |
-| `graph_stats.py` | yes | Per-graph descriptors (e.g. Gromov `delta_mean`) reported alongside the tables |
-| `two_stage_chart_schedule.py` | yes | Coarse/fine chart schedule under the stress loss (`--graph`) |
+| `datasets.py` | yes | Shared dataset loaders (single-cell k-NN graphs, airport networks, OpenFlights) |
+| `graph_stats.py` | yes | Shared per-graph descriptors (e.g. Gromov `delta_mean`) |
+| `hypegrl_paper/` | yes | The library paper: Table I link prediction (`run_table_i()`), the hierarchy ladder, ogbl-ddi, the geometry diagnostics, and their figures |
+| `icassp2027/` | yes | The ICASSP 2027 paper: the two-stage curvature schedule under the stress loss (`two_stage_chart_schedule.py --graph`) |
+| `exploratory/` | yes | Studies and sanity checks that informed the papers or the library's design notes but produce no number in either; may lag the library |
 | `data/single_cell/` | yes | Small vendored CSVs (see that folder's README) |
 | `data/phylogeny/` | yes | Small vendored Open Tree of Life clade trees (see that folder's README) |
 | `data/` (other) | no | Download-on-demand caches (OpenFlights, torch_geometric Airports) — gitignored |
-| `results/` | no | All run outputs — gitignored, see below |
+| `results/` | no | All run outputs, shared by every folder — gitignored, see below |
+
+Scripts import each other as package modules (`from experiments.graph_stats import …`),
+and the editable install exposes only `hypegrl`, not `experiments`. Run them as modules
+from the repository root, which works for every script:
+`python -m experiments.hypegrl_paper.link_prediction_experiment`.
 
 ## `results/` is scratch output — nothing in it is committed
 

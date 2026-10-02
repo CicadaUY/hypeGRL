@@ -72,8 +72,8 @@ from hypegrl.representations import (
     TangentRepresentation,
 )
 
-RESULTS = Path(__file__).resolve().parent / "results"
-PHYLOGENY = Path(__file__).resolve().parent / "data" / "phylogeny"
+RESULTS = Path(__file__).resolve().parents[1] / "results"
+PHYLOGENY = Path(__file__).resolve().parents[1] / "data" / "phylogeny"
 DEFAULT_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Spans both arms' usable ranges; see the module docstring on why one shared grid.

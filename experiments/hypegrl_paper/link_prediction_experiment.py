@@ -540,10 +540,10 @@ if __name__ == "__main__":
     from pathlib import Path
 
     warnings.filterwarnings("ignore")
-    out_dir = Path(__file__).resolve().parent / "results"
+    out_dir = Path(__file__).resolve().parents[1] / "results"
     out_dir.mkdir(exist_ok=True)
 
-    # `python -m experiments.link_prediction_experiment ladder` runs the
+    # `python -m experiments.hypegrl_paper.link_prediction_experiment ladder` runs the
     # hierarchy ladder; no argument reproduces Table I as before.
     if len(sys.argv) > 1 and sys.argv[1] == "ladder":
         rows = run_hierarchy_ladder()

@@ -35,7 +35,7 @@ import powerlaw
 from scipy.optimize import linprog
 from scipy.sparse import lil_matrix
 
-from graph_stats import mean_hyperbolicity
+from experiments.graph_stats import mean_hyperbolicity
 
 # ---------------------------------------------------------------------------
 # Degree / clustering (the PNAS axis)

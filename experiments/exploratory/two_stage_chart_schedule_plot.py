@@ -33,7 +33,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-RESULTS = Path(__file__).resolve().parent / "results"
+RESULTS = Path(__file__).resolve().parents[1] / "results"
 COLOURS = {"tangent": "#2a78d6"}
 CURVED = ["#c0392b", "#8e44ad", "#1e8449", "#d68910"]
 

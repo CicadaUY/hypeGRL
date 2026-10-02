@@ -1,5 +1,14 @@
+"""Print the geometry diagnostics for six synthetic graphs of known shape.
+
+A sanity check of :mod:`experiments.hypegrl_paper.geometry_diagnostics` by eye:
+a tree should read hyperbolic, a grid or a complete graph should not.
+
+Run, from the repo root:
+    python -m experiments.exploratory.synthetic_geometry_diagnostics_test
+"""
 import networkx as nx
-from geometry_diagnostics import diagnose, format_report
+
+from experiments.hypegrl_paper.geometry_diagnostics import diagnose, format_report
 
 graphs = {
     'balanced_tree(3,5)': nx.balanced_tree(3, 5),

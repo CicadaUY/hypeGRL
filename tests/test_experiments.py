@@ -4,10 +4,10 @@ import numpy as np
 import pytest
 import torch
 
-from experiments import two_stage_chart_schedule as two_stage
+from experiments.icassp2027 import two_stage_chart_schedule as two_stage
 from experiments.datasets import balanced_tree_graph, single_cell_graph
 from experiments.graph_stats import _distance_matrix, mean_hyperbolicity
-from experiments.ogbl_ddi_link_prediction import _score_edges
+from experiments.hypegrl_paper.ogbl_ddi_link_prediction import _score_edges
 
 
 def test_tree_is_zero_hyperbolic():
@@ -217,7 +217,7 @@ def test_rdpg_candidate_scores_handles_non_contiguous_node_labels():
     ladder does. Indexing the adjacency by ``range(N)`` there either raises or
     silently scores the wrong pairs.
     """
-    from experiments.link_prediction_experiment import rdpg_candidate_scores
+    from experiments.hypegrl_paper.link_prediction_experiment import rdpg_candidate_scores
     from hypegrl.evaluation import link_prediction_split, training_graph
 
     G = nx.karate_club_graph()
@@ -243,7 +243,7 @@ def test_rdpg_candidate_scores_handles_non_contiguous_node_labels():
 
 
 def test_largest_component_split_drops_only_out_of_component_pairs():
-    from experiments.link_prediction_experiment import largest_component_split
+    from experiments.hypegrl_paper.link_prediction_experiment import largest_component_split
     from hypegrl.evaluation import LinkPredictionSplit
 
     # Two triangles joined by a bridge; the bridge is the held-out edge, so
@@ -269,7 +269,7 @@ def test_largest_component_split_drops_only_out_of_component_pairs():
 
 def test_ladder_driver_runs_on_an_injected_toy_loader():
     """The `loaders` injection point drives the whole pipeline with no download."""
-    from experiments.link_prediction_experiment import run_hierarchy_ladder
+    from experiments.hypegrl_paper.link_prediction_experiment import run_hierarchy_ladder
 
     rows = run_hierarchy_ladder(
         datasets=["toy"],
@@ -293,7 +293,7 @@ def test_ladder_prepares_splits_once_per_dataset_so_arms_are_paired():
     if the two arms ran on identical data — so the splits must be built once per
     dataset, not once per (method, dimension).
     """
-    import experiments.link_prediction_experiment as lpe
+    import experiments.hypegrl_paper.link_prediction_experiment as lpe
 
     calls, seen = [], []
     real_prepare = lpe._prepare_splits
@@ -327,7 +327,7 @@ def test_ladder_prepares_splits_once_per_dataset_so_arms_are_paired():
 
 
 def test_hyperbolic_advantage_pairs_by_dataset_and_dim():
-    from experiments.link_prediction_experiment import hyperbolic_advantage
+    from experiments.hypegrl_paper.link_prediction_experiment import hyperbolic_advantage
 
     # Per-seed AUCs differ by a constant +0.10, so the *paired* std is exactly 0
     # even though each arm has a large spread of its own. Computing the
@@ -360,7 +360,7 @@ def test_hyperbolic_advantage_pairs_by_dataset_and_dim():
 def test_score_edges_direction_flag():
     """The RDPG arm scores a probability matrix, the hyperbolic arms a distance
     matrix, so the sign convention has to be selectable."""
-    from experiments.ogbl_ddi_link_prediction import _score_edges
+    from experiments.hypegrl_paper.ogbl_ddi_link_prediction import _score_edges
 
     M = np.array([[0.0, 1.0, 5.0], [1.0, 0.0, 2.0], [5.0, 2.0, 0.0]])
     edges = np.array([[0, 1], [1, 2]])
@@ -376,7 +376,7 @@ def test_evaluate_split_reports_hits_and_auc_without_ogb_download():
     deliberately not unit-tested; this covers the scoring/AUC assembly around
     them.
     """
-    from experiments.ogbl_ddi_link_prediction import evaluate_split
+    from experiments.hypegrl_paper.ogbl_ddi_link_prediction import evaluate_split
 
     # Distances: the two positives are closer than the two negatives.
     M = np.array([

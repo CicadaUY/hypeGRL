@@ -35,9 +35,9 @@ library API:
      globally rotated but locally faithful layout).
 
 Run:
-    python experiments/fermi_dirac_recovery_demo.py
-    python experiments/fermi_dirac_recovery_demo.py --method dmercator --n 150
-    python experiments/fermi_dirac_recovery_demo.py --sampling euclidean  # contrast
+    python experiments/hypegrl_paper/fermi_dirac_recovery_demo.py
+    python experiments/hypegrl_paper/fermi_dirac_recovery_demo.py --method dmercator --n 150
+    python experiments/hypegrl_paper/fermi_dirac_recovery_demo.py --sampling euclidean  # contrast
 """
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ import torch
 from scipy.stats import pearsonr, spearmanr
 from sklearn.metrics import roc_auc_score
 
-REPO = str(Path(__file__).resolve().parents[1])
+REPO = str(Path(__file__).resolve().parents[2])
 sys.path.insert(0, REPO)
 
 from hypegrl.embedders.precomputed import PrecomputedEmbedder  # noqa: E402

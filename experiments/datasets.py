@@ -444,7 +444,7 @@ def wordnet_noun_subtree_graph(
     Undirected hypernym graph of the WordNet noun subtree rooted at
     ``root`` (default: the mammal subtree from Nickel & Kiela's own
     qualitative figures). See the "Additional literature datasets" note in
-    ``experiments/geometry_diagnostics_report.py`` for why a subtree rather than the full ~82k-synset
+    ``experiments/hypegrl_paper/geometry_diagnostics_report.py`` for why a subtree rather than the full ~82k-synset
     noun hierarchy.
 
     Edges are *direct* hypernym relations (parent-child in the hierarchy),
@@ -495,7 +495,7 @@ def citation_graph(name: str = "Cora", root: Optional[str] = None) -> nx.Graph:
     """
     Citation network (``"Cora"``, ``"CiteSeer"``, or ``"PubMed"``), edge
     direction dropped. See the "Additional literature datasets" note in
-    ``experiments/geometry_diagnostics_report.py`` -- these are the three datasets Chami et al.'s HGCN paper
+    ``experiments/hypegrl_paper/geometry_diagnostics_report.py`` -- these are the three datasets Chami et al.'s HGCN paper
     reports Gromov delta-hyperbolicity for.
     """
     from torch_geometric.datasets import Planetoid

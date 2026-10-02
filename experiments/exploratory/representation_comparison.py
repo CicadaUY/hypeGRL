@@ -14,7 +14,7 @@ Three tiers (Stage D of the representation refactor):
    an lr sweep; report final loss and whether it stayed finite.
 
 Run:
-    python experiments/representation_comparison.py
+    python experiments/exploratory/representation_comparison.py
 """
 import sys
 import warnings
@@ -29,7 +29,7 @@ import networkx as nx
 import numpy as np
 import torch
 
-REPO = str(Path(__file__).resolve().parents[1])
+REPO = str(Path(__file__).resolve().parents[2])
 sys.path.insert(0, REPO)
 
 from hypegrl.embedders._dmercator_init import dmercator_init  # noqa: E402

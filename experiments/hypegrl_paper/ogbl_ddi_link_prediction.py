@@ -31,11 +31,8 @@ def _ogb_safe_globals():
     """Classes that need allow-listing to unpickle OGB-cached ``torch_geometric``
     objects under PyTorch 2.6+'s ``weights_only=True`` default ``torch.load``.
 
-    Duplicated from (not imported from) ``geometry_diagnostics_report.py``: that
-    module's own top-level import (``from geometry_diagnostics import ...``) is
-    module-relative and only resolves when ``experiments/`` is on
-    ``sys.path[0]`` (i.e. run as a script), so importing it as
-    ``experiments.geometry_diagnostics_report`` fails.
+    A superset of ``geometry_diagnostics_report._ogb_safe_globals``: it also
+    allow-lists numpy's array-reconstruction types.
     """
     import numpy as np
     from torch_geometric.data import Data

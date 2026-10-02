@@ -12,7 +12,7 @@ as skipped rather than aborting the whole run, so this is safe to run with
 a partial install.
 
 Run:
-    python experiments/geometry_diagnostics_report.py
+    python experiments/hypegrl_paper/geometry_diagnostics_report.py
 """
 import gzip
 import sys
@@ -22,10 +22,10 @@ from typing import Callable, Optional
 
 import networkx as nx
 
-REPO = str(Path(__file__).resolve().parents[1])
+REPO = str(Path(__file__).resolve().parents[2])
 sys.path.insert(0, REPO)
 
-from geometry_diagnostics import diagnose, format_report  # noqa: E402
+from experiments.hypegrl_paper.geometry_diagnostics import diagnose, format_report  # noqa: E402
 
 RESULTS = Path(REPO) / "experiments" / "results"
 
