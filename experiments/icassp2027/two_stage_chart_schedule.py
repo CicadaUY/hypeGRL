@@ -226,8 +226,11 @@ def load_handover(path, nodes, graph, n):
 
 
 def sweep(chart, r, v, target, mask, A, rates, n_steps, curves, coords, device,
-          checkpoint):
+          checkpoint, refine=refine):
     """Run one chart at every rate; return the row for its best.
+
+    ``refine`` runs one arm; another experiment passes its own to sweep arms that
+    are not charts (a different optimiser on one chart, say) through the same loop.
 
     ``checkpoint`` is called after each rate. A full sweep is hours long, so the
     alternative — writing once at the end — loses everything to an interruption and

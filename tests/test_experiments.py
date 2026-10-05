@@ -513,3 +513,198 @@ def test_widest_subtree_respects_the_size_band():
     assert set(sub.nodes()) == set(range(sub.number_of_nodes()))
     with pytest.raises(ValueError):
         build_phylogenies.widest_subtree(T, 1000, 2000)
+
+
+# ------------------------------------------------- Muon on the tangent chart
+
+
+def _muon_module():
+    from experiments import muon_chart_comparison
+    return muon_chart_comparison
+
+
+def _one_step(mode, z, grad, chart_curvature=None, momentum=0.0,
+              orthogonalizer="svd"):
+    """The displacement one ``TangentMuon`` step applies to ``z`` given ``grad``."""
+    muon = _muon_module()
+    p = torch.nn.Parameter(z.clone())
+    opt = muon.TangentMuon([p], lr=1.0, momentum=momentum, mode=mode,
+                           chart_curvature=chart_curvature,
+                           orthogonalizer=orthogonalizer)
+    p.grad = grad.clone()
+    opt.step()
+    return (p - z).detach()
+
+
+def _random_tall(n=30, d=2, seed=0, scale=1.0):
+    g = torch.Generator().manual_seed(seed)
+    return scale * torch.randn(n, d, generator=g, dtype=torch.float64)
+
+
+def test_polar_factor_is_the_orthogonal_part_of_a_tall_matrix():
+    """``U Vᵀ`` has orthonormal columns and equals ``D (DᵀD)^{-1/2}``."""
+    muon = _muon_module()
+    D = _random_tall()
+    O = muon.polar_factor(D)
+    assert torch.allclose(O.T @ O, torch.eye(2, dtype=torch.float64), atol=1e-12)
+    evals, evecs = torch.linalg.eigh(D.T @ D)
+    inv_sqrt = evecs @ torch.diag(evals.rsqrt()) @ evecs.T
+    assert torch.allclose(O, D @ inv_sqrt, atol=1e-12)
+
+
+def test_muon_orthogonalises_exactly_by_default():
+    """The default is the exact SVD: with no momentum the step is ``−lr·√N·U Vᵀ``."""
+    muon = _muon_module()
+    z, g = _random_tall(scale=5.0, seed=6), _random_tall(seed=7)
+    step = _one_step("muon", z, g)
+    assert torch.allclose(step, -np.sqrt(30) * muon.polar_factor(g), atol=1e-12)
+
+
+def test_muon_can_orthogonalise_by_newton_schulz():
+    muon = _muon_module()
+    z, g = _random_tall(scale=5.0, seed=6), _random_tall(seed=7)
+    step = _one_step("muon", z, g, orthogonalizer="newton_schulz5")
+    assert torch.allclose(step, -np.sqrt(30) * muon.newton_schulz5(g), atol=1e-12)
+
+
+def test_an_unknown_orthogonalizer_is_rejected():
+    muon = _muon_module()
+    p = torch.nn.Parameter(_random_tall())
+    with pytest.raises(ValueError):
+        muon.TangentMuon([p], lr=1.0, orthogonalizer="qr")
+
+
+def _with_singular_values(sigma, n=30, seed=0):
+    """A tall ``(n, 2)`` matrix with the given singular values and random vectors."""
+    g = torch.Generator().manual_seed(seed)
+    U, _ = torch.linalg.qr(torch.randn(n, 2, generator=g, dtype=torch.float64))
+    V, _ = torch.linalg.qr(torch.randn(2, 2, generator=g, dtype=torch.float64))
+    return U @ torch.diag(torch.tensor(sigma, dtype=torch.float64)) @ V.T, U, V
+
+
+@pytest.mark.parametrize("sigma", [(3.0, 2.0), (50.0, 0.5), (1e-3, 1e-5)])
+def test_newton_schulz_keeps_singular_vectors_and_pulls_values_near_one(sigma):
+    """
+    NS5 returns ``U f(Σ) Vᵀ``: the singular vectors of ``U Vᵀ``, with singular values
+    only roughly 1. Jordan's coefficients trade exact convergence for speed, landing
+    them in about ``[0.7, 1.2]`` -- the band here is loose on purpose, since pinning
+    exact values would pin the coefficients rather than the property. Holds across
+    scales (the input is normalised) and down to a condition number of 100.
+    """
+    muon = _muon_module()
+    D, U, V = _with_singular_values(sigma)
+    X = muon.newton_schulz5(D)
+    core = U.T @ X @ V                       # f(Σ) if the singular vectors are kept
+    assert torch.allclose(core, torch.diag(torch.diagonal(core)), atol=1e-10)
+    assert ((torch.diagonal(core) > 0.6) & (torch.diagonal(core) < 1.25)).all()
+
+
+def test_newton_schulz_is_the_same_for_a_matrix_and_its_transpose():
+    """The wide form is handled by transposing, so both orientations agree."""
+    muon = _muon_module()
+    D = _random_tall()
+    assert torch.allclose(muon.newton_schulz5(D.T), muon.newton_schulz5(D).T,
+                          atol=1e-12)
+
+
+def test_newton_schulz_of_zero_is_zero():
+    muon = _muon_module()
+    assert (muon.newton_schulz5(torch.zeros(5, 2, dtype=torch.float64)) == 0).all()
+
+
+def test_metric_root_keeps_radial_and_scales_angular_by_r_over_warp():
+    muon = _muon_module()
+    c = 0.3
+    z = torch.tensor([[3.0, 0.0], [0.0, 10.0]], dtype=torch.float64)
+    X = torch.tensor([[2.0, 5.0], [7.0, -1.0]], dtype=torch.float64)
+    s = muon.angular_whitening(z, c)
+    r = torch.tensor([3.0, 10.0], dtype=torch.float64)
+    expected_s = r * np.sqrt(c) / torch.sinh(np.sqrt(c) * r)
+    assert torch.allclose(s, expected_s)
+    out = muon.apply_metric_root(z, X, s)
+    # node 0 points along x: radial = x-component, angular = y-component
+    assert out[0, 0] == pytest.approx(2.0)
+    assert out[0, 1] == pytest.approx(5.0 * float(expected_s[0]))
+    # node 1 points along y
+    assert out[1, 1] == pytest.approx(-1.0)
+    assert out[1, 0] == pytest.approx(7.0 * float(expected_s[1]))
+
+
+def test_hyperbolic_muon_reduces_to_muon_as_chart_curvature_vanishes():
+    """``w_c(r) → r`` as ``c → 0``, so the whitening is the identity: plain Muon."""
+    z, g = _random_tall(scale=5.0, seed=1), _random_tall(seed=2)
+    plain = _one_step("muon", z, g)
+    flat = _one_step("hmuon", z, g, chart_curvature=1e-10)
+    assert torch.allclose(plain, flat, atol=1e-8)
+
+
+@pytest.mark.parametrize("orthogonalizer", ["svd", "newton_schulz5"])
+@pytest.mark.parametrize("mode,c", [("muon", None), ("hmuon", 0.3), ("normgd", None)])
+def test_tangent_muon_step_is_rotation_equivariant(mode, c, orthogonalizer):
+    """
+    The stress sees only distances, so rotating every node by one ``R ∈ O(2)`` is
+    the same problem; the step must rotate with it. (Per-coordinate Adam does not
+    have this property — see ``TangentRepresentation``'s docstring.)
+    """
+    z, g = _random_tall(scale=5.0, seed=3), _random_tall(seed=4)
+    t = 0.7
+    R = torch.tensor([[np.cos(t), -np.sin(t)], [np.sin(t), np.cos(t)]],
+                     dtype=torch.float64)
+    rotated = _one_step(mode, z @ R, g @ R, c, orthogonalizer=orthogonalizer)
+    plain = _one_step(mode, z, g, c, orthogonalizer=orthogonalizer)
+    assert torch.allclose(rotated, plain @ R, atol=1e-10)
+
+
+@pytest.mark.parametrize("orthogonalizer", ["svd", "newton_schulz5"])
+def test_muon_step_keeps_plain_gradient_node_proportions(orthogonalizer):
+    """
+    Pins the prediction the comparison is designed around: Newton-Schulz maps a tall
+    ``D`` to ``D·p(DᵀD)``, one global ``d×d`` matrix on the right, so when ``DᵀD`` is
+    a multiple of the identity Muon's step is exactly a multiple of the gradient --
+    it does not equalise nodes. (The same holds for the exact ``D (DᵀD)^{-1/2}``.)
+    """
+    g = torch.zeros(4, 2, dtype=torch.float64)
+    g[0, 0], g[1, 1] = 3.0, 3.0            # DᵀD = 9·I
+    z = _random_tall(n=4, seed=5)
+    step = _one_step("muon", z, g, orthogonalizer=orthogonalizer)
+    ratio = step[0, 0] / g[0, 0]
+    assert ratio < 0
+    assert torch.allclose(step, ratio * g, atol=1e-12)
+
+
+@pytest.mark.parametrize("arm", ["muon", "hmuon_c=0.3", "normgd"])
+def test_every_muon_arm_lowers_the_stress(arm):
+    muon = _muon_module()
+    _, r, v, target, mask = _tiny_stress_problem()
+    _, _, history = muon.refine_arm(arm, r, v, target, mask, 1e-2, 200, "cpu")
+    assert np.isfinite(history).all()
+    assert history[-20:].mean() < history[0]
+
+
+def test_muon_arm_refinement_is_deterministic():
+    muon = _muon_module()
+    _, r, v, target, mask = _tiny_stress_problem()
+    first = muon.refine_arm("hmuon_c=0.3", r, v, target, mask, 1e-2, 40, "cpu")[2]
+    second = muon.refine_arm("hmuon_c=0.3", r, v, target, mask, 1e-2, 40, "cpu")[2]
+    assert np.array_equal(first, second)
+
+
+def test_a_diverged_muon_run_stops_early_and_sorts_last(monkeypatch):
+    """
+    A non-finite loss ends the run at once, reported as ``inf``. Carrying on is not
+    just wasted steps: the SVD of a non-finite matrix fails to converge on CUDA and
+    falls back to a slow solver (turning one diverged 30k-step run into 25 min), and
+    on CPU it raises, which would end the sweep.
+    """
+    muon = _muon_module()
+    _, r, v, target, mask = _tiny_stress_problem()
+    calls = []
+    step = muon.TangentMuon.step
+    monkeypatch.setattr(muon.TangentMuon, "step",
+                        lambda self: (calls.append(1), step(self))[1])
+    # A point at infinity makes the very first loss non-finite.
+    stress, _, history = muon.refine_arm(
+        "muon", r * np.inf, v, target, mask, 1e-2, 500, "cpu")
+    assert stress == float("inf")
+    assert len(history) == 500 and not np.isfinite(history).any()
+    assert len(calls) == 0

@@ -20,6 +20,11 @@ Usage:
     python two_stage_chart_schedule_plot.py caterpillar40-4 cuda
     python two_stage_chart_schedule_plot.py fabaceae_sub cuda
     python two_stage_chart_schedule_plot.py fabaceae_sub cuda --tag cbracket
+    python two_stage_chart_schedule_plot.py caterpillar40-4 cuda \
+        --prefix muon_chart_comparison
+
+A run with no coarse phase (an empty ``coarse`` curve, as ``muon_chart_comparison.py``
+writes by default) is drawn without the coarse line and the handover marker.
 """
 from __future__ import annotations
 
@@ -63,9 +68,11 @@ def main():
     ap.add_argument("graph", help="graph name as it appears in the filename")
     ap.add_argument("device", nargs="?", default="cuda")
     ap.add_argument("--tag", default="", help="the run's --tag, if it was given one")
+    ap.add_argument("--prefix", default="two_stage_chart_schedule",
+                    help="the runner's file prefix, e.g. muon_chart_comparison")
     args = ap.parse_args()
 
-    stem = RESULTS / (f"two_stage_chart_schedule_{args.graph}_{args.device}"
+    stem = RESULTS / (f"{args.prefix}_{args.graph}_{args.device}"
                       + (f"_{args.tag}" if args.tag else ""))
     # Appended, not with_suffix: a tag carrying a dot would otherwise read as a suffix
     # and be replaced, so the plot would silently open a different run's files.
@@ -82,8 +89,9 @@ def main():
 
     fig, (ax, ax2) = plt.subplots(1, 2, figsize=(15.0, 6.0))
 
-    ax.plot(*smooth(coarse), color="#555", lw=2.0,
-            label=f"coarse: tangent, lr={meta['lr_coarse']:g}")
+    if len(coarse):
+        ax.plot(*smooth(coarse), color="#555", lw=2.0,
+                label=f"coarse: tangent, lr={meta['lr_coarse']:g}")
     for chart in charts:
         colour = colour_of(chart, charts)
         for lr, history in sorted(runs[chart].items()):
@@ -91,13 +99,14 @@ def main():
             ax.plot(*smooth(np.concatenate([coarse, history])), color=colour,
                     lw=2.4 if is_best else 0.8, alpha=1.0 if is_best else 0.35,
                     label=f"{chart}  lr={lr:g}" if is_best else None)
-    ax.axvline(len(coarse), color="black", ls="--", lw=1.2, alpha=0.6)
+    if len(coarse):
+        ax.axvline(len(coarse), color="black", ls="--", lw=1.2, alpha=0.6)
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xlabel("cumulative step")
     ax.set_ylabel("stress")
-    ax.set_title("trajectories; dashed = handover\n"
-                 "faint: every rate, solid: each chart's best", fontsize=11)
+    heading = "trajectories; dashed = handover" if len(coarse) else "trajectories"
+    ax.set_title(heading + "\nfaint: every rate, solid: each chart's best", fontsize=11)
     ax.grid(alpha=0.25, which="both")
     ax.legend(fontsize=9, loc="best")
 
@@ -111,7 +120,7 @@ def main():
                      ms=18, zorder=5)
     ax2.set_xscale("log")
     ax2.set_yscale("log")
-    ax2.set_xlabel("fine-phase learning rate")
+    ax2.set_xlabel("fine-phase learning rate" if len(coarse) else "learning rate")
     ax2.set_ylabel(f"stress after {meta['n_fine']} steps")
     ax2.set_title("rate curves; star = best\n"
                   "a best at an end of a line means the grid ran out", fontsize=11)
