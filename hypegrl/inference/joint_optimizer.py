@@ -31,19 +31,23 @@ import hypegrl.inference.imputation as imputation
 
 def build_adjacency(
     A_known: torch.Tensor,
-    unknown_edges: list[tuple[int, int]],
+    unknown_edges: list[tuple[int, int]] | torch.Tensor,
     a_omega: torch.Tensor,
 ) -> torch.Tensor:
     """
     Assemble the full symmetric adjacency matrix from known entries and
     the current estimate of unknown edge weights.
 
+    All entries are written in one indexed operation, so the cost does not
+    grow with a Python loop over ``|Omega|`` (this runs every optimisation step).
+
     Parameters
     ----------
     A_known:
         ``(N, N)`` adjacency tensor with zeros at positions in ``unknown_edges``.
     unknown_edges:
-        List of ``(m, n)`` pairs identifying unknown entries.
+        The ``(m, n)`` pairs identifying unknown entries: a list of tuples or
+        an integer tensor of shape ``(|Omega|, 2)``. Pairs must be distinct.
     a_omega:
         ``(|Omega|,)`` tensor of current unknown edge weight estimates,
         already passed through sigmoid (values in ``(0, 1)``).
@@ -52,11 +56,9 @@ def build_adjacency(
     -------
     ``(N, N)`` symmetric adjacency tensor with unknown entries filled in.
     """
-    A = A_known.clone()
-    for k, (m, n) in enumerate(unknown_edges):
-        A[m, n] = a_omega[k]
-        A[n, m] = a_omega[k]
-    return A
+    idx = torch.as_tensor(unknown_edges, dtype=torch.long, device=A_known.device)
+    m, n = idx.reshape(-1, 2).unbind(dim=1)
+    return A_known.index_put((m, n), a_omega).index_put((n, m), a_omega)
 
 
 def graph_to_tensor(
@@ -157,6 +159,7 @@ def joint_optimize(
         List of ``(m, n)`` tuples for edges whose weights are unknown.
         If ``None`` or empty, no unknown entries are optimised and the
         problem reduces to standard embedding (``A`` is constant).
+        Each pair may appear only once, in either orientation.
     a_omega_init:
         Initial values for unknown edge weights, in ``(0, 1)``.
         Defaults to the row/column-mean heuristic.
@@ -190,9 +193,18 @@ def joint_optimize(
     - ``a_omega``: ``(|Omega|,)`` NumPy array of imputed edge weights.
     - ``loss_history``: list of scalar loss values, one per step.
     - ``unknown_edges``: the input ``unknown_edges`` list (for reference).
+
+    Raises
+    ------
+    ValueError
+        If a pair occurs more than once in ``unknown_edges`` (``(m, n)`` and
+        ``(n, m)`` count as the same pair): it would get two weights for one entry.
     """
     device_ = torch.device(device)
     unknown_edges = unknown_edges or []
+    if len({frozenset(pair) for pair in unknown_edges}) < len(unknown_edges):
+        raise ValueError("unknown_edges lists a pair more than once "
+                         "((m, n) and (n, m) count as the same pair).")
 
     # ── Adjacency ────────────────────────────────────────────────────────
     A_known = graph_to_tensor(G, unknown_edges, device_)
@@ -221,6 +233,7 @@ def joint_optimize(
 
     # ── Training loop ────────────────────────────────────────────────────
     loss_history: list[float] = []
+    unknown_idx = torch.as_tensor(unknown_edges, dtype=torch.long, device=device_)
 
     for step in range(n_steps):
         optimizer.zero_grad()
@@ -228,7 +241,7 @@ def joint_optimize(
         # Build adjacency with current a_Omega estimate
         if a_omega_raw is not None:
             a_omega = torch.sigmoid(a_omega_raw)
-            A = build_adjacency(A_known, unknown_edges, a_omega)
+            A = build_adjacency(A_known, unknown_idx, a_omega)
         else:
             a_omega = torch.zeros(0, dtype=torch.float64, device=device_)
             A = A_known

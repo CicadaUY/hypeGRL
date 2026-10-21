@@ -138,6 +138,61 @@ def test_build_adjacency_symmetric():
     assert torch.allclose(A, A.T)
 
 
+def _build_adjacency_by_loop(A_known, unknown_edges, a_omega):
+    """Reference: fill the unknown entries one pair at a time."""
+    A = A_known.clone()
+    for k, (m, n) in enumerate(unknown_edges):
+        A[m, n] = a_omega[k]
+        A[n, m] = a_omega[k]
+    return A
+
+
+def test_build_adjacency_matches_loop_values_and_gradients():
+    """The vectorised fill equals the per-pair loop, entries and gradients."""
+    rng = np.random.default_rng(0)
+    N = 12
+    pairs = [(i, j) for i in range(N) for j in range(i + 1, N)]
+    unknown_edges = [pairs[k] for k in rng.choice(len(pairs), 20, replace=False)]
+    A_known = torch.tensor(rng.random((N, N)), dtype=torch.float64)
+    A_known = (A_known + A_known.T) / 2
+    for m, n in unknown_edges:
+        A_known[m, n] = A_known[n, m] = 0.0
+    raw = torch.tensor(rng.standard_normal(len(unknown_edges)), dtype=torch.float64)
+
+    grads = []
+    for build in (build_adjacency, _build_adjacency_by_loop):
+        a_raw = raw.clone().requires_grad_(True)
+        A = build(A_known, unknown_edges, torch.sigmoid(a_raw))
+        (forest_matrix(A) ** 2).sum().backward()
+        grads.append((A.detach(), a_raw.grad.clone()))
+
+    assert torch.equal(grads[0][0], grads[1][0])
+    assert torch.equal(grads[0][1], grads[1][1])
+
+
+def test_build_adjacency_accepts_index_tensor():
+    A_known = torch.zeros(4, 4, dtype=torch.float64)
+    unknown_edges = [(0, 1), (2, 3)]
+    a_omega = torch.tensor([0.6, 0.4], dtype=torch.float64)
+    from_list = build_adjacency(A_known, unknown_edges, a_omega)
+    from_tensor = build_adjacency(A_known, torch.tensor(unknown_edges), a_omega)
+    assert torch.equal(from_list, from_tensor)
+
+
+def test_build_adjacency_empty_omega_returns_known():
+    A_known = torch.rand(4, 4, dtype=torch.float64)
+    A = build_adjacency(A_known, [], torch.zeros(0, dtype=torch.float64))
+    assert torch.equal(A, A_known)
+
+
+@pytest.mark.parametrize("duplicated", [[(0, 2), (0, 2)], [(0, 2), (2, 0)]])
+def test_joint_fit_rejects_duplicate_unknown_pairs(small_graph, duplicated):
+    """A pair listed twice (in either orientation) would get two weights for one entry."""
+    emb = PoincareMapsEmbedder(d=2, n_steps=2, log_every=0)
+    with pytest.raises(ValueError, match="more than once"):
+        emb.fit(small_graph, unknown_edges=duplicated)
+
+
 # ── PoincareMapsEmbedder ──────────────────────────────────────────────────
 
 def test_embedder_fit_shape(small_graph):
