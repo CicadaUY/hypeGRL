@@ -64,14 +64,34 @@ def make_graph(family, N, beta=None):
     return nx.convert_node_labels_to_integers(G)
 
 
-def hide(G, f, seed):
-    """Hidden pairs: f/5 of the non-edges followed by f of the edges, without replacement."""
+def hide(G, f, seed, keep_connected=False):
+    """Hidden pairs: f/5 of the non-edges, then f of the edges, without replacement.
+
+    With ``keep_connected``, edges are visited in random order and hidden only if the
+    graph without them stays connected, so the zeroed graph is never split (an isolated
+    node's forest-matrix row is a spike no embedding can match). Fewer than f of the
+    edges are hidden when not enough can be removed; the hidden-edge count records it.
+    """
     rng = np.random.default_rng(seed)
     edges = list(G.edges())
     non_edges = [(u, v) for u, v in combinations(G, 2) if not G.has_edge(u, v)]
     n_con, n_dis = max(int(len(edges) * f), 1), max(int(len(non_edges) * f / 5), 1)
-    return ([tuple(map(int, non_edges[i])) for i in rng.choice(len(non_edges), n_dis, replace=False)]
-            + [tuple(map(int, edges[i])) for i in rng.choice(len(edges), n_con, replace=False)])
+    hidden = [tuple(map(int, non_edges[i]))
+              for i in rng.choice(len(non_edges), n_dis, replace=False)]
+    if not keep_connected:
+        return hidden + [tuple(map(int, edges[i]))
+                         for i in rng.choice(len(edges), n_con, replace=False)]
+    G0, hidden_edges = G.copy(), []
+    for i in rng.permutation(len(edges)):
+        if len(hidden_edges) == n_con:
+            break
+        u, v = edges[i]
+        G0.remove_edge(u, v)
+        if nx.has_path(G0, u, v):
+            hidden_edges.append((int(u), int(v)))
+        else:
+            G0.add_edge(u, v)
+    return hidden + hidden_edges
 
 
 def fit(G, unknown, X_init, mode, steps, lr_x, lr_a, device="cpu"):
