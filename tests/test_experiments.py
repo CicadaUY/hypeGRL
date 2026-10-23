@@ -708,3 +708,42 @@ def test_a_diverged_muon_run_stops_early_and_sorts_last(monkeypatch):
     assert stress == float("inf")
     assert len(history) == 500 and not np.isfinite(history).any()
     assert len(calls) == 0
+
+
+@pytest.mark.parametrize("ri, rj, dtheta", [(0.3, 2.0, 0.7), (5.0, 1.5, 2.0), (3.0, 3.0, 0.1)])
+def test_angular_gradient_matches_the_law_of_sines_form(ri, rj, dtheta):
+    """d_theta_i d_ij = sinh(r_i) sin(alpha_ij), alpha_ij the triangle's angle at x_i.
+
+    With two nodes the stress is (d - t)^2, so its angular derivative is
+    2 (d - t) d_theta d. The angle comes from the hyperbolic law of cosines, an
+    independent route to the same quantity, and the large-radius case checks that
+    """
+    from experiments.icassp2027.angular_gradient_slope import angular_gradient, pair_distances
+
+    r = np.array([ri, rj])
+    theta = np.array([0.0, dtheta])
+    target = np.zeros((2, 2))
+    target[0, 1] = target[1, 0] = 1.0
+    d = float(pair_distances(torch.tensor(r), torch.tensor(theta), [0], [1])[0])
+    cos_alpha = (np.cosh(ri) * np.cosh(d) - np.cosh(rj)) / (np.sinh(ri) * np.sinh(d))
+    expected = -2 * (d - 1.0) * np.sinh(ri) * np.sqrt(1 - cos_alpha**2)
+    assert angular_gradient(r, theta, target)[0] == pytest.approx(expected, rel=1e-6)
+
+
+def test_angular_gradient_saturates_for_an_outer_node():
+    """At large r_i, d_theta_i d_ij tends to sinh r_j sin dtheta / (cosh r_j - sinh r_j cos dtheta).
+
+    The limit does not depend on r_i (the factor the backup slides call saturation),
+    and the law-of-cosines route used above cancels catastrophically here
+    (sin alpha ~ e^{-r_i}), so this checks the large-radius path separately.
+    """
+    from experiments.icassp2027.angular_gradient_slope import angular_gradient, pair_distances
+
+    ri, rj, dtheta = 30.0, 2.0, 0.8
+    r = np.array([ri, rj])
+    theta = np.array([0.0, dtheta])
+    target = np.zeros((2, 2))
+    target[0, 1] = target[1, 0] = 1.0
+    d = float(pair_distances(torch.tensor(r), torch.tensor(theta), [0], [1])[0])
+    limit = np.sinh(rj) * np.sin(dtheta) / (np.cosh(rj) - np.sinh(rj) * np.cos(dtheta))
+    assert angular_gradient(r, theta, target)[0] == pytest.approx(-2 * (d - 1.0) * limit, rel=1e-9)
